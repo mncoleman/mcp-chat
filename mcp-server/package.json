@@ -1,7 +1,7 @@
 {
   "name": "mcp-chat-connect",
-  "version": "1.0.0",
-  "description": "MCP server for connecting Claude Code sessions to MCP Chat -- real-time team messaging for AI-assisted development",
+  "version": "1.1.0",
+  "description": "MCP server with channels support for connecting Claude Code sessions to MCP Chat -- real-time team messaging for AI-assisted development",
   "main": "index.js",
   "bin": {
     "mcp-chat-connect": "./index.js"
@@ -27,7 +27,8 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "open": "^10.1.0"
+    "open": "^10.1.0",
+    "ws": "^8.16.0"
   },
   "files": [
     "index.js"

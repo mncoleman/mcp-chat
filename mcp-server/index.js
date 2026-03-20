@@ -4,6 +4,7 @@ const http = require('http');
 const { URL } = require('url');
 const fs = require('fs');
 const path = require('path');
+const WebSocket = require('ws');
 
 // Config file stores auth state between sessions
 const CONFIG_DIR = path.join(require('os').homedir(), '.mcp-chat');
@@ -21,15 +22,6 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function isValidUrl(str) {
-  try {
-    const url = new URL(str);
-    return url.protocol === 'https:' || url.protocol === 'http:';
-  } catch {
-    return false;
-  }
 }
 
 // ─── Config persistence ──────────────────────────────────────────────────────
@@ -64,6 +56,87 @@ async function apiCall(tool, args, token) {
   return response.json();
 }
 
+// ─── Channel notification (push messages into Claude's context) ──────────────
+
+function sendNotification(method, params) {
+  const msg = JSON.stringify({ jsonrpc: '2.0', method, params });
+  process.stdout.write(`${msg}\n`);
+}
+
+function pushChannelMessage(source, content, meta) {
+  sendNotification('notifications/claude/channel', {
+    content,
+    meta: { source, ...meta },
+  });
+}
+
+// ─── WebSocket listener for real-time channel messages ───────────────────────
+
+let wsConnection = null;
+let wsReconnectTimeout = null;
+
+function connectWebSocket() {
+  if (!sessionState.connected || !sessionState.token || !sessionState.channelId) return;
+
+  const wsUrl = `${MCP_CHAT_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?token=${sessionState.token}&channel=${sessionState.channelId}&session=mcp-cli`;
+
+  if (wsConnection) {
+    try { wsConnection.close(); } catch {}
+  }
+
+  const ws = new WebSocket(wsUrl);
+  wsConnection = ws;
+
+  ws.on('open', () => {
+    process.stderr.write(`[mcp-chat] WebSocket connected to #${sessionState.channelName}\n`);
+  });
+
+  ws.on('message', (raw) => {
+    try {
+      const data = JSON.parse(raw.toString());
+
+      if (data.type === 'new_message') {
+        const msg = data.message;
+        // Don't echo back messages sent by this user's session
+        if (msg.user_id === sessionState.userId) return;
+
+        pushChannelMessage('mcp-chat', msg.content, {
+          channel: sessionState.channelName,
+          user: msg.user_name || 'unknown',
+          message_type: msg.message_type || 'info',
+          timestamp: msg.created_at || new Date().toISOString(),
+        });
+      } else if (data.type === 'presence') {
+        pushChannelMessage('mcp-chat', `${data.user_name} ${data.status} #${sessionState.channelName}`, {
+          channel: sessionState.channelName,
+          event: 'presence',
+          user: data.user_name,
+          status: data.status,
+        });
+      }
+    } catch (err) {
+      process.stderr.write(`[mcp-chat] WebSocket parse error: ${err.message}\n`);
+    }
+  });
+
+  ws.on('close', () => {
+    process.stderr.write(`[mcp-chat] WebSocket disconnected, reconnecting in 5s...\n`);
+    wsReconnectTimeout = setTimeout(connectWebSocket, 5000);
+  });
+
+  ws.on('error', (err) => {
+    process.stderr.write(`[mcp-chat] WebSocket error: ${err.message}\n`);
+  });
+}
+
+function disconnectWebSocket() {
+  if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout);
+  if (wsConnection) {
+    try { wsConnection.close(); } catch {}
+    wsConnection = null;
+  }
+}
+
 // ─── Browser auth flow ───────────────────────────────────────────────────────
 
 function startAuthFlow() {
@@ -77,7 +150,6 @@ function startAuthFlow() {
         const channelName = url.searchParams.get('channel_name');
         const userName = url.searchParams.get('user_name');
 
-        // Validate inputs
         const parsedChannelId = parseInt(channelId, 10);
         if (!token || !channelId || isNaN(parsedChannelId) || parsedChannelId <= 0) {
           res.writeHead(400, { 'Content-Type': 'text/plain' });
@@ -85,7 +157,6 @@ function startAuthFlow() {
           return;
         }
 
-        // Sanitize all values before inserting into HTML
         const safeChannelName = escapeHtml(channelName || channelId);
         const safeRedirectUrl = escapeHtml(`${MCP_CHAT_URL}/chat/${parsedChannelId}`);
 
@@ -113,7 +184,6 @@ function startAuthFlow() {
       res.end();
     });
 
-    // Bind to loopback only
     server.listen(0, '127.0.0.1', async () => {
       const port = server.address().port;
       const connectUrl = `${MCP_CHAT_URL}/connect?callback=${encodeURIComponent(`http://127.0.0.1:${port}/callback`)}`;
@@ -122,14 +192,12 @@ function startAuthFlow() {
         const open = (await import('open')).default;
         await open(connectUrl);
       } catch {
-        // Fallback: use platform-specific open command with no shell interpolation
         const { spawn } = require('child_process');
         const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
         spawn(cmd, [connectUrl], { stdio: 'ignore', detached: true }).unref();
       }
     });
 
-    // Timeout after 5 minutes
     setTimeout(() => {
       server.close();
       reject(new Error('Auth flow timed out after 5 minutes'));
@@ -144,6 +212,7 @@ let sessionState = {
   channelId: null,
   channelName: null,
   userName: null,
+  userId: null,
   connected: false,
 };
 
@@ -152,6 +221,7 @@ const savedConfig = loadConfig();
 if (savedConfig.token) {
   sessionState.token = savedConfig.token;
   sessionState.userName = savedConfig.userName;
+  sessionState.userId = savedConfig.userId;
 }
 
 function sendResponse(id, result) {
@@ -169,8 +239,8 @@ function getTools() {
     {
       name: 'mcp_chat_connect',
       description: sessionState.connected
-        ? `Currently connected to #${sessionState.channelName} as ${sessionState.userName}. Run this again to switch channels.`
-        : 'Connect to MCP Chat. Opens your browser to authenticate and select a channel.',
+        ? `Currently connected to #${sessionState.channelName} as ${sessionState.userName}. Live messages are being pushed into this session. Run again to switch channels.`
+        : 'Connect to MCP Chat. Opens your browser to authenticate and select a channel. Once connected, messages will be pushed into this session in real-time.',
       inputSchema: { type: 'object', properties: {}, required: [] },
     },
     {
@@ -217,16 +287,32 @@ async function handleToolCall(name, args) {
   switch (name) {
     case 'mcp_chat_connect': {
       try {
+        // Disconnect existing WebSocket if switching channels
+        disconnectWebSocket();
+
         const result = await startAuthFlow();
+
+        // Decode the JWT to get userId (base64 payload)
+        let userId = null;
+        try {
+          const payload = JSON.parse(Buffer.from(result.token.split('.')[1], 'base64').toString());
+          userId = payload.id;
+        } catch {}
+
         sessionState = {
           token: result.token,
           channelId: result.channelId,
           channelName: result.channelName,
           userName: result.userName,
+          userId,
           connected: true,
         };
-        saveConfig({ token: result.token, userName: result.userName });
-        return { content: [{ type: 'text', text: `Connected to #${result.channelName} as ${result.userName}. You can now send and read messages.` }] };
+        saveConfig({ token: result.token, userName: result.userName, userId });
+
+        // Start WebSocket listener for real-time push
+        connectWebSocket();
+
+        return { content: [{ type: 'text', text: `Connected to #${result.channelName} as ${result.userName}. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.` }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Connection failed: ${err.message}` }], isError: true };
       }
@@ -299,7 +385,8 @@ async function handleToolCall(name, args) {
       if (!sessionState.connected) {
         return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_connect to pick a channel.' : 'Not connected. Run mcp_chat_connect to authenticate and select a channel.' }] };
       }
-      return { content: [{ type: 'text', text: `Connected to #${sessionState.channelName} as ${sessionState.userName}` }] };
+      const wsStatus = wsConnection?.readyState === 1 ? 'live (receiving messages)' : 'reconnecting...';
+      return { content: [{ type: 'text', text: `Connected to #${sessionState.channelName} as ${sessionState.userName}\nWebSocket: ${wsStatus}` }] };
     }
 
     default:
@@ -316,8 +403,11 @@ async function handleMessage(msg) {
     case 'initialize':
       sendResponse(id, {
         protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'mcp-chat-connect', version: '1.0.0' },
+        capabilities: {
+          tools: {},
+          experimental: { 'claude/channel': {} },
+        },
+        serverInfo: { name: 'mcp-chat-connect', version: '1.1.0' },
       });
       break;
 
@@ -364,4 +454,11 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => {
+  disconnectWebSocket();
+  process.exit(0);
+});
+
+// Clean shutdown
+process.on('SIGTERM', () => { disconnectWebSocket(); process.exit(0); });
+process.on('SIGINT', () => { disconnectWebSocket(); process.exit(0); });
