@@ -58,14 +58,22 @@ function setupWebSocket(server) {
     // Update user last_seen
     await pool.query('UPDATE users SET last_seen_at = NOW() WHERE id = $1', [user.id]);
 
-    // Notify channel of presence change
-    broadcastToChannel(channelId, {
-      type: 'presence',
-      user_id: user.id,
-      user_name: user.name,
-      session_token: sessionToken,
-      status: 'connected',
-    });
+    // Only broadcast presence for Claude sessions (has session_token)
+    // Browser connections are silent -- online status derived from userConnections
+    if (sessionToken) {
+      broadcastToChannel(channelId, {
+        type: 'presence',
+        user_id: user.id,
+        user_name: user.name,
+        session_token: sessionToken,
+        status: 'connected',
+      });
+    }
+
+    // Server-side ping to keep connection alive
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === 1) ws.ping();
+    }, 30000);
 
     // Handle incoming messages from WebSocket clients (browser UI)
     ws.on('message', async (raw) => {
@@ -89,6 +97,7 @@ function setupWebSocket(server) {
     });
 
     ws.on('close', async () => {
+      clearInterval(pingInterval);
       channelClients.get(channelId)?.delete(clientInfo);
       userConnections.get(user.id)?.delete(clientInfo);
 
@@ -97,19 +106,36 @@ function setupWebSocket(server) {
           'UPDATE sessions SET is_connected = false, disconnected_at = NOW() WHERE session_token = $1',
           [sessionToken]
         );
-      }
 
-      broadcastToChannel(channelId, {
-        type: 'presence',
-        user_id: user.id,
-        user_name: user.name,
-        session_token: sessionToken,
-        status: 'disconnected',
-      });
+        broadcastToChannel(channelId, {
+          type: 'presence',
+          user_id: user.id,
+          user_name: user.name,
+          session_token: sessionToken,
+          status: 'disconnected',
+        });
+      }
     });
 
-    // Send connection confirmation
-    ws.send(JSON.stringify({ type: 'connected', channel_id: channelId, user: { id: user.id, name: user.name } }));
+    // Send connection confirmation with current online users for this channel
+    const onlineUsers = {};
+    const channelConns = channelClients.get(channelId);
+    if (channelConns) {
+      for (const conn of channelConns) {
+        if (!onlineUsers[conn.userId]) {
+          onlineUsers[conn.userId] = { user_id: conn.userId, user_name: conn.userName, session_token: conn.sessionToken };
+        } else if (conn.sessionToken) {
+          // Upgrade to show session_token if any connection has one
+          onlineUsers[conn.userId].session_token = conn.sessionToken;
+        }
+      }
+    }
+    ws.send(JSON.stringify({
+      type: 'connected',
+      channel_id: channelId,
+      user: { id: user.id, name: user.name },
+      online: Object.values(onlineUsers),
+    }));
   });
 
   return wss;
