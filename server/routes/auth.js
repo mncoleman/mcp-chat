@@ -56,8 +56,8 @@ router.post('/google', async (req, res) => {
     const countResult = await pool.query('SELECT COUNT(*) FROM users');
     const isFirstUser = parseInt(countResult.rows[0].count) === 0;
 
+    let inviteId = null;
     if (!isFirstUser) {
-      // Must have an email invite
       const inviteResult = await pool.query(
         'SELECT id FROM invites WHERE email = $1 AND used_by IS NULL AND (expires_at IS NULL OR expires_at > NOW())',
         [email]
@@ -65,8 +65,7 @@ router.post('/google', async (req, res) => {
       if (inviteResult.rows.length === 0) {
         return res.status(403).json({ error: 'No invite found for this email. Ask an admin to invite you.' });
       }
-      // Mark invite as used after creating user (below)
-      var inviteId = inviteResult.rows[0].id;
+      inviteId = inviteResult.rows[0].id;
     }
 
     // Create user

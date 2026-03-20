@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'changeme_secret_key';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error('FATAL: JWT_SECRET environment variable must be set to a random string of at least 32 characters');
+  process.exit(1);
+}
 
 function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'];

@@ -19,10 +19,19 @@ app.use(helmet({
   crossOriginOpenerPolicy: false,
   crossOriginResourcePolicy: false,
 }));
-app.use(cors());
-app.use(morgan('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['https://mcpchat.dovito.com', 'http://localhost:5173'];
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(express.json({ limit: '50kb' }));
+app.use(express.urlencoded({ extended: true, limit: '50kb' }));
 
 // Make broadcast available to route handlers
 app.locals.broadcast = (channelId, data) => broadcastToChannel(String(channelId), data);
@@ -48,7 +57,7 @@ if (fs.existsSync(clientDist)) {
 // Auth (public)
 app.use('/api/auth', require('./routes/auth'));
 
-// Invite validation is public (so registration page can check)
+// Invite validation is public
 const invitesRouter = require('./routes/invites');
 app.get('/api/invites/validate/:code', invitesRouter);
 
@@ -76,5 +85,4 @@ setupWebSocket(server);
 
 server.listen(PORT, () => {
   console.log(`MCP Chat server running on port ${PORT}`);
-  console.log(`WebSocket available at ws://localhost:${PORT}/ws`);
 });

@@ -93,7 +93,7 @@ router.get('/:id', async (req, res) => {
     );
 
     const sessionsResult = await pool.query(
-      `SELECT s.id, s.session_token, s.label, s.is_connected, s.connected_at, u.name as user_name, u.id as user_id
+      `SELECT s.id, s.label, s.is_connected, s.connected_at, u.name as user_name, u.id as user_id
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.channel_id = $1 AND s.is_connected = true
