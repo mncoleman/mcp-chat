@@ -1,6 +1,6 @@
 {
   "name": "mcp-chat-connect",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP server with channels support for connecting Claude Code sessions to MCP Chat -- real-time team messaging for AI-assisted development",
   "main": "index.js",
   "bin": {

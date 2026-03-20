@@ -107,6 +107,11 @@ function connectWebSocket() {
           timestamp: msg.created_at || new Date().toISOString(),
         });
       } else if (data.type === 'presence') {
+        // Only push presence for Claude Code sessions (have session_token), not browser refreshes
+        if (!data.session_token) return;
+        // Don't push own presence events
+        if (data.user_id === sessionState.userId) return;
+
         pushChannelMessage('mcp-chat', `${data.user_name} ${data.status} #${sessionState.channelName}`, {
           channel: sessionState.channelName,
           event: 'presence',
