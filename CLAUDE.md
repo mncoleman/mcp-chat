@@ -6,7 +6,7 @@ Monorepo with three components:
 
 - **client/** -- React 18 + Vite + TailwindCSS + shadcn/ui. Pages in `src/pages/` (Login, ChatPage, ConnectPage, SetupPage, UsersPage, ChannelsPage). Shared components in `src/components/` (AppLayout, AppSidebar, AppHeader, ui/). Auth context in `src/context/AuthContext.jsx`. WebSocket hook in `src/hooks/useWebSocket.js`.
 - **server/** -- Express on Node.js. Raw SQL via `pg` pool (no ORM). JWT auth middleware at `server/middleware/auth.js`. Routes in `server/routes/` (auth, channels, messages, users, sessions, invites, presence). WebSocket server at `server/ws/index.js`. MCP SSE/HTTP endpoint at `server/mcp/index.js`.
-- **mcp-server/** -- Standalone MCP server published as `mcp-chat-connect` on npm (v1.1.1). JSON-RPC over stdio with channels protocol support. Declares `experimental: { 'claude/channel': {} }` capability. Opens browser for OAuth flow, connects WebSocket for live message push, stores token at `~/.mcp-chat/config.json` (0o600 permissions).
+- **mcp-server/** -- Standalone MCP server published as `mcp-chat-connect` on npm. JSON-RPC over stdio with channels protocol support. Declares `experimental: { 'claude/channel': {} }` capability. Opens browser for OAuth flow, connects WebSocket for live message push, stores token at `~/.mcp-chat/config.json` (0o600 permissions).
 
 ## Database
 
@@ -14,7 +14,7 @@ PostgreSQL with tables: `users`, `channels`, `channel_members`, `messages`, `ses
 
 ## Auth flow
 
-Google OAuth via `@react-oauth/google` on frontend. Server verifies ID token with `google-auth-library`. First user auto-becomes admin. All others require email invite (admin creates invite with email, person must sign in with matching Google account). Google Workspace internal (dovito.com only).
+Google OAuth via `@react-oauth/google` on frontend. Server verifies ID token with `google-auth-library`. First user auto-becomes admin. All others require email invite (admin creates invite with email, person must sign in with matching Google account).
 
 ## Channels protocol
 
@@ -53,40 +53,30 @@ The MCP server (`mcp-server/index.js`) integrates with Claude Code's channels re
 
 ## Deployment
 
-Docker Compose on AWS EC2: app (Node + built client), postgres, nginx (SSL termination + WebSocket upgrade), certbot (Let's Encrypt auto-renewal). CI/CD via GitHub Actions -- push to main auto-deploys.
+Docker Compose: app (Node + built client), postgres, nginx (SSL termination + WebSocket upgrade), certbot (Let's Encrypt auto-renewal).
 
-- **Instance:** i-0d05b0b7a28157174 (t3.micro) in us-east-1
-- **IP:** 18.234.174.141
-- **Domain:** mcpchat.dovito.com
-- **Security group:** sg-012677476034006d1 (ports 22, 80, 443)
-- **SSH key:** mcp-chat-key (uses ~/.ssh/id_ed25519)
-- **Deploy path on EC2:** /home/ec2-user/mcp-chat
-- **GitHub repo:** mncoleman/mcp-chat (private)
-- **GitHub secrets:** EC2_HOST, EC2_SSH_KEY
-
-### CI/CD flow
-
-Push to main -> GitHub Actions SSH into EC2 -> git pull -> docker build with VITE_GOOGLE_CLIENT_ID and VITE_API_URL build args -> docker-compose up -> prune old images.
-
-### Manual deploy
-
-```bash
-rsync -avz --exclude node_modules --exclude .git --exclude certbot . ec2-user@18.234.174.141:/home/ec2-user/mcp-chat/
-ssh ec2-user@18.234.174.141 "cd /home/ec2-user/mcp-chat && source .env && sudo docker build --no-cache --build-arg VITE_GOOGLE_CLIENT_ID=\$GOOGLE_CLIENT_ID --build-arg VITE_API_URL=\$APP_URL -t mcp-chat-app . && sudo /usr/local/bin/docker-compose up -d app"
+Configure via `.env`:
+```
+DB_PASSWORD=your_strong_password
+JWT_SECRET=your_random_secret_at_least_32_chars
+GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+APP_URL=https://your-domain.com
+ALLOWED_ORIGINS=https://your-domain.com
 ```
 
-### Tear down
+Update `nginx.conf` with your domain. Run `./deploy.sh` or `docker-compose up -d`.
 
-```bash
-aws ec2 terminate-instances --instance-ids i-0d05b0b7a28157174 --region us-east-1
-aws ec2 delete-security-group --group-id sg-012677476034006d1 --region us-east-1
-aws ec2 delete-key-pair --key-name mcp-chat-key --region us-east-1
-# Remove DNS A record for mcpchat.dovito.com
-```
+### CI/CD
+
+Optional GitHub Actions workflow at `.github/workflows/deploy.yml`. Requires GitHub secrets:
+- `EC2_HOST` -- server IP
+- `EC2_SSH_KEY` -- SSH private key
+
+Push to main -> GitHub Actions SSH into server -> git pull -> docker build with VITE_GOOGLE_CLIENT_ID and VITE_API_URL build args -> docker-compose up -> prune old images.
 
 ### npm package
 
-Published as `mcp-chat-connect` on npm under `mncoleman`. To publish updates:
+Published as `mcp-chat-connect` on npm. To publish updates:
 ```bash
 cd mcp-server && npm version patch && npm publish
 ```
@@ -96,7 +86,7 @@ Users update with: `npm install -g mcp-chat-connect`
 
 ```bash
 npm install -g mcp-chat-connect
-claude mcp add -e MCP_CHAT_URL=https://mcpchat.dovito.com -s user mcp-chat $(which mcp-chat-connect)
+claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat $(which mcp-chat-connect)
 alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
 ```
 
