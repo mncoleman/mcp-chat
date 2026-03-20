@@ -343,6 +343,7 @@ async function handleToolCall(name, args) {
         channel_id: sessionState.channelId,
         content,
         message_type: messageType,
+        session_token: sessionState.sessionToken,
       }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
       return { content: [{ type: 'text', text: `Message sent to #${sessionState.channelName}` }] };

@@ -157,8 +157,8 @@ export default function ChatPage() {
                   )}>
                     {showHeader ? (
                       isFromClaude ? (
-                        <div className="h-7 w-7 shrink-0 mt-0.5 rounded-full bg-violet-100 flex items-center justify-center">
-                          <Terminal className="h-3.5 w-3.5 text-violet-600" />
+                        <div className="h-7 w-7 shrink-0 mt-0.5 rounded-full bg-orange-100 flex items-center justify-center">
+                          <Terminal className="h-3.5 w-3.5 text-orange-700" />
                         </div>
                       ) : (
                         <Avatar className="h-7 w-7 shrink-0 mt-0.5">
@@ -172,7 +172,7 @@ export default function ChatPage() {
                     <div className={cn('max-w-[70%] min-w-0', isOwn && !isFromClaude && 'text-right')}>
                       {showHeader && (
                         <div className={cn('flex items-center gap-1.5 mb-0.5', isOwn && !isFromClaude && 'flex-row-reverse')}>
-                          <span className={cn('text-xs font-medium', isFromClaude && 'text-violet-700')}>
+                          <span className={cn('text-xs font-medium', isFromClaude && 'text-orange-700')}>
                             {displayName}
                           </span>
                           <span className="text-[10px] text-muted-foreground">
@@ -183,7 +183,7 @@ export default function ChatPage() {
                       <div className={cn(
                         'inline-block rounded-2xl px-3 py-1 text-sm leading-snug',
                         isFromClaude
-                          ? 'bg-violet-50 border border-violet-200 text-violet-900'
+                          ? 'bg-orange-50 border border-orange-200 text-orange-900'
                           : isOwn
                             ? 'bg-primary text-primary-foreground'
                             : messageTypeStyles[msg.message_type] || 'bg-muted',
