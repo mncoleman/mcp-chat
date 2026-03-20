@@ -36,11 +36,13 @@ function setupWebSocket(server) {
       return;
     }
 
-    // If session token provided, mark session as connected
+    // If session token provided, upsert session as connected
     if (sessionToken) {
       await pool.query(
-        'UPDATE sessions SET is_connected = true, connected_at = NOW() WHERE session_token = $1 AND user_id = $2',
-        [sessionToken, user.id]
+        `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
+         VALUES ($1, $2, $3, $4, true, NOW())
+         ON CONFLICT (session_token) DO UPDATE SET is_connected = true, connected_at = NOW()`,
+        [sessionToken, user.id, channelId, 'Claude Code Session']
       );
     }
 

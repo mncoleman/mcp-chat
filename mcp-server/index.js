@@ -4,6 +4,7 @@ const http = require('http');
 const { URL } = require('url');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const WebSocket = require('ws');
 
 // Config file stores auth state between sessions
@@ -78,7 +79,7 @@ let wsReconnectTimeout = null;
 function connectWebSocket() {
   if (!sessionState.connected || !sessionState.token || !sessionState.channelId) return;
 
-  const wsUrl = `${MCP_CHAT_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?token=${sessionState.token}&channel=${sessionState.channelId}&session=mcp-cli`;
+  const wsUrl = `${MCP_CHAT_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?token=${sessionState.token}&channel=${sessionState.channelId}&session=${sessionState.sessionToken}`;
 
   if (wsConnection) {
     try { wsConnection.close(); } catch {}
@@ -218,6 +219,7 @@ let sessionState = {
   channelName: null,
   userName: null,
   userId: null,
+  sessionToken: null,
   connected: false,
 };
 
@@ -304,12 +306,14 @@ async function handleToolCall(name, args) {
           userId = payload.id;
         } catch {}
 
+        const sessionToken = `mcp-${crypto.randomBytes(16).toString('hex')}`;
         sessionState = {
           token: result.token,
           channelId: result.channelId,
           channelName: result.channelName,
           userName: result.userName,
           userId,
+          sessionToken,
           connected: true,
         };
         saveConfig({ token: result.token, userName: result.userName, userId });
