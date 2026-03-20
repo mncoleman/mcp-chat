@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { Copy, Check, Terminal, Radio, Hash, Package, Zap, MessageSquare, Command } from 'lucide-react'
+import { Copy, Check, Terminal, Radio, Hash, Package, Zap, MessageSquare, Command, Bot } from 'lucide-react'
 
 function CopyBlock({ label, content }) {
   const [copied, setCopied] = useState(false)
@@ -49,22 +49,28 @@ function CopyBlock({ label, content }) {
 export default function SetupPage() {
   const baseUrl = window.location.origin
 
-  const mcpConfig = JSON.stringify({
-    "mcpServers": {
-      "mcp-chat": {
-        "command": "npx",
-        "args": ["mcp-chat-connect"],
-        "env": {
-          "MCP_CHAT_URL": baseUrl
-        }
-      }
-    }
-  }, null, 2)
+  const agentPrompt = `Set up MCP Chat for my Claude Code environment. Run these commands:
+
+1. Install the MCP server globally:
+npm install -g mcp-chat-connect
+
+2. Register it with Claude Code:
+claude mcp add -e MCP_CHAT_URL=${baseUrl} -s user mcp-chat $(which mcp-chat-connect)
+
+3. Add this shell alias to my ~/.zshrc (or ~/.bashrc):
+echo '' >> ~/.zshrc
+echo '# MCP Chat - Claude Code with channels' >> ~/.zshrc
+echo "alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'" >> ~/.zshrc
+
+4. Verify the server is connected:
+claude mcp get mcp-chat
+
+After setup, tell me to run "source ~/.zshrc" and then I can start a session with "claudechat".`
 
   const shellAlias = `# Add to your ~/.zshrc or ~/.bashrc
-alias claudechat='claude --dangerously-load-development-channels server:mcp-chat'`
+alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'`
 
-  const launchCommand = 'claude --dangerously-load-development-channels server:mcp-chat'
+  const launchCommand = 'claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-8 overflow-y-auto h-full">
@@ -73,82 +79,109 @@ alias claudechat='claude --dangerously-load-development-channels server:mcp-chat
         <p className="text-muted-foreground">Connect your Claude Code sessions to MCP Chat with live notifications</p>
       </div>
 
-      {/* Step 1: MCP Config */}
+      {/* Quick setup - AI agent prompt */}
+      <div className="space-y-4 border rounded-lg p-6 bg-primary/5">
+        <div className="flex items-center gap-2">
+          <Bot className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-semibold">Quick Setup</h2>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Paste this prompt into any Claude Code session and it will set everything up for you automatically.
+        </p>
+        <CopyBlock label="Paste this into Claude Code" content={agentPrompt} />
+      </div>
+
+      <Separator />
+
+      {/* Manual setup */}
+      <div>
+        <h2 className="text-lg font-semibold mb-1">Manual Setup</h2>
+        <p className="text-sm text-muted-foreground">If you prefer to do it step by step.</p>
+      </div>
+
+      {/* Step 1: Install */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">1</Badge>
-          <h2 className="text-lg font-semibold">Add MCP Server to Claude Code</h2>
+          <h2 className="text-lg font-semibold">Install the MCP Server</h2>
         </div>
         <p className="text-sm text-muted-foreground">
-          Copy this config and add it to your <code className="bg-muted px-1 rounded">~/.claude/settings.json</code> file.
-          No installation or cloning required -- it runs directly from npm via <code className="bg-muted px-1 rounded">npx</code>.
+          Install the package globally so Claude Code can find it instantly (no download delay).
         </p>
-        <CopyBlock label="Claude Code MCP Config" content={mcpConfig} />
+        <CopyBlock label="Install globally" content="npm install -g mcp-chat-connect" />
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Package className="h-3 w-3" />
           <span>Package: <a href="https://www.npmjs.com/package/mcp-chat-connect" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">mcp-chat-connect</a> on npm</span>
         </div>
       </div>
 
-      {/* Step 2: Launch with channels */}
+      {/* Step 2: Register with Claude Code */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">2</Badge>
-          <h2 className="text-lg font-semibold">Start a Session with Channels</h2>
+          <h2 className="text-lg font-semibold">Register with Claude Code</h2>
         </div>
         <p className="text-sm text-muted-foreground">
-          To receive live messages, start Claude Code with the channels flag. This enables the MCP server to push
-          messages directly into your session in real-time.
+          Add the MCP server to your Claude Code user config so it's available in every session.
         </p>
-        <CopyBlock label="Launch command" content={launchCommand} />
-        <div className="border rounded-lg p-4 bg-amber-50 border-amber-200 space-y-2">
-          <div className="flex items-center gap-2">
-            <Zap className="h-4 w-4 text-amber-600" />
-            <span className="text-sm font-medium text-amber-900">Channels is a Research Preview</span>
-          </div>
-          <p className="text-xs text-amber-800">
-            The <code className="bg-amber-100 px-1 rounded">--dangerously-load-development-channels</code> flag
-            does two things: it enables the channels listener (like <code className="bg-amber-100 px-1 rounded">--channels</code>)
-            and allows loading custom channel servers. The <code className="bg-amber-100 px-1 rounded">--channels</code> flag
-            alone only works with Anthropic-maintained plugins (Telegram, Discord). Since MCP Chat is a custom server,
-            it needs the development variant. The <code className="bg-amber-100 px-1 rounded">dangerously</code> prefix
-            is standard Anthropic convention for user-controlled extensions during the research preview -- it will simplify
-            as channels reaches general availability.
-          </p>
-        </div>
+        <CopyBlock label="Register MCP server" content={`claude mcp add -e MCP_CHAT_URL=${baseUrl} -s user mcp-chat $(which mcp-chat-connect)`} />
+        <p className="text-sm text-muted-foreground">
+          Verify it's connected:
+        </p>
+        <CopyBlock label="Verify" content="claude mcp get mcp-chat" />
       </div>
 
-      {/* Step 3: Connect to a channel */}
+      {/* Step 3: Shell alias */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">3</Badge>
-          <h2 className="text-lg font-semibold">Connect to a Channel</h2>
+          <h2 className="text-lg font-semibold">Create a Shell Shortcut</h2>
         </div>
         <p className="text-sm text-muted-foreground">
-          Once your session is running, tell Claude:
+          Add an alias so you can type <code className="bg-muted px-1 rounded">claudechat</code> to start a session with channels enabled.
         </p>
-        <CopyBlock label="Connect prompt" content="Connect to MCP Chat" />
+        <CopyBlock label="Add to ~/.zshrc or ~/.bashrc" content={shellAlias} />
+        <p className="text-sm text-muted-foreground">
+          Then run <code className="bg-muted px-1 rounded">source ~/.zshrc</code> or restart your terminal.
+        </p>
+      </div>
+
+      {/* Step 4: Launch and connect */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">4</Badge>
+          <h2 className="text-lg font-semibold">Launch and Connect</h2>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Start a session and tell Claude to connect:
+        </p>
+        <CopyBlock label="Launch" content="claudechat" />
+        <CopyBlock label="Then say" content="Connect to MCP Chat" />
         <p className="text-sm text-muted-foreground">
           Your browser opens automatically. Sign in with Google, pick a channel, and your session is live.
-          Messages from other team members (and their Claude sessions) will appear in your conversation in real-time.
+          Messages from other team members will appear in your conversation in real-time.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          To resume a previous session with channels: <code className="bg-muted px-1 rounded">claudechat --resume</code>
         </p>
       </div>
 
       <Separator />
 
-      {/* Shell alias tip */}
-      <div className="space-y-4">
+      {/* Research preview note */}
+      <div className="border rounded-lg p-4 bg-amber-50 border-amber-200 space-y-2">
         <div className="flex items-center gap-2">
-          <Command className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-semibold">Tip: Create a Shell Shortcut</h2>
+          <Zap className="h-4 w-4 text-amber-600" />
+          <span className="text-sm font-medium text-amber-900">Channels is a Research Preview</span>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Add an alias to your shell config so you can start a channels-enabled session by typing a single word.
-        </p>
-        <CopyBlock label="Shell alias (add to ~/.zshrc or ~/.bashrc)" content={shellAlias} />
-        <p className="text-sm text-muted-foreground">
-          After adding, run <code className="bg-muted px-1 rounded">source ~/.zshrc</code> (or restart your terminal).
-          Then just type <code className="bg-muted px-1 rounded">claudechat</code> to start a session with MCP Chat channels enabled.
+        <p className="text-xs text-amber-800">
+          The <code className="bg-amber-100 px-1 rounded">--dangerously-load-development-channels</code> flag
+          does two things: it enables the channels listener (like <code className="bg-amber-100 px-1 rounded">--channels</code>)
+          and allows loading custom channel servers. The <code className="bg-amber-100 px-1 rounded">--channels</code> flag
+          alone only works with Anthropic-maintained plugins (Telegram, Discord). Since MCP Chat is a custom server,
+          it needs the development variant. The <code className="bg-amber-100 px-1 rounded">dangerously</code> prefix
+          is standard Anthropic convention for user-controlled extensions during the research preview -- it will simplify
+          as channels reaches general availability.
         </p>
       </div>
 
@@ -245,6 +278,13 @@ alias claudechat='claude --dangerously-load-development-channels server:mcp-chat
               enables both channels and custom server loading in one flag. Without it,
               you can still use the tools to send and read messages manually, but you won't get real-time push.
               Use the shell alias (<code className="bg-muted px-1 rounded">claudechat</code>) to avoid typing it every time.
+            </p>
+          </div>
+          <div>
+            <p className="text-sm font-medium">Can I resume a session with channels?</p>
+            <p className="text-sm text-muted-foreground">
+              Yes. Use <code className="bg-muted px-1 rounded">claudechat --resume</code> to pick up where you left off
+              with channels re-enabled. You can also pass a specific session ID.
             </p>
           </div>
           <div>
