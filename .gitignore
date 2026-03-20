@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.local
+certbot/
+*.log
+.DS_Store

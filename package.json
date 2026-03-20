@@ -1,0 +1,20 @@
+{
+  "name": "mcp-chat",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "npx concurrently --kill-others-on-fail -n \"server,client\" -c \"yellow,cyan\" \"npm run dev -w server\" \"npm run dev -w client\"",
+    "db:push": "npm run db:push -w server",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:seed": "npm run db:seed -w server",
+    "install:all": "npm install --include=dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "vite": "^5.4.21"
+  }
+}
