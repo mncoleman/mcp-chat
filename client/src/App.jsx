@@ -31,7 +31,7 @@ export default function App() {
         <Route path="chat" element={<ChatPage />} />
         <Route path="chat/:channelId" element={<ChatPage />} />
         <Route path="setup" element={<SetupPage />} />
-        <Route path="channels" element={<AdminRoute><ChannelsPage /></AdminRoute>} />
+        <Route path="channels" element={<ChannelsPage />} />
         <Route path="users" element={<AdminRoute><UsersPage /></AdminRoute>} />
       </Route>
     </Routes>

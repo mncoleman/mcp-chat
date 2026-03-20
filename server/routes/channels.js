@@ -4,19 +4,33 @@ const pool = require('../db/pool');
 const { requireAdmin } = require('../middleware/auth');
 
 /**
- * GET /api/channels - List channels the current user belongs to
+ * GET /api/channels - List channels
+ * Admins see all channels. Regular users see only channels they belong to.
  */
 router.get('/', async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT c.*, cm.role as member_role,
-        (SELECT COUNT(*) FROM channel_members WHERE channel_id = c.id) as member_count
-       FROM channels c
-       JOIN channel_members cm ON cm.channel_id = c.id AND cm.user_id = $1
-       WHERE c.is_archived = false
-       ORDER BY c.created_at DESC`,
-      [req.user.id]
-    );
+    let result;
+    if (req.user.role === 'admin') {
+      result = await pool.query(
+        `SELECT c.*,
+          (SELECT COUNT(*) FROM channel_members WHERE channel_id = c.id) as member_count,
+          (SELECT role FROM channel_members WHERE channel_id = c.id AND user_id = $1) as member_role
+         FROM channels c
+         WHERE c.is_archived = false
+         ORDER BY c.created_at DESC`,
+        [req.user.id]
+      );
+    } else {
+      result = await pool.query(
+        `SELECT c.*, cm.role as member_role,
+          (SELECT COUNT(*) FROM channel_members WHERE channel_id = c.id) as member_count
+         FROM channels c
+         JOIN channel_members cm ON cm.channel_id = c.id AND cm.user_id = $1
+         WHERE c.is_archived = false
+         ORDER BY c.created_at DESC`,
+        [req.user.id]
+      );
+    }
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -24,9 +38,9 @@ router.get('/', async (req, res) => {
 });
 
 /**
- * POST /api/channels - Create a channel (admin only)
+ * POST /api/channels - Create a channel (any authenticated user)
  */
-router.post('/', requireAdmin, async (req, res) => {
+router.post('/', async (req, res) => {
   const client = await pool.connect();
   try {
     const { name, description, member_ids } = req.body;
@@ -70,15 +84,17 @@ router.post('/', requireAdmin, async (req, res) => {
 
 /**
  * GET /api/channels/:id - Get channel details with members
+ * Admins can view any channel. Members can view their own.
  */
 router.get('/:id', async (req, res) => {
   try {
-    // Verify membership
-    const memberCheck = await pool.query(
-      'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
-      [req.params.id, req.user.id]
-    );
-    if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member of this channel' });
+    if (req.user.role !== 'admin') {
+      const memberCheck = await pool.query(
+        'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+        [req.params.id, req.user.id]
+      );
+      if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member of this channel' });
+    }
 
     const channelResult = await pool.query('SELECT * FROM channels WHERE id = $1', [req.params.id]);
     if (channelResult.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });

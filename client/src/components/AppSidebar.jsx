@@ -9,9 +9,9 @@ export default function AppSidebar({ collapsed, mobileOpen, onMobileClose }) {
 
   const navItems = [
     { label: 'Chat', path: '/chat', icon: MessageSquare },
+    { label: 'Channels', path: '/channels', icon: Hash },
     { label: 'Setup', path: '/setup', icon: Settings },
     ...(isAdmin ? [
-      { label: 'Channels', path: '/channels', icon: Hash },
       { label: 'Users', path: '/users', icon: Users },
     ] : []),
   ]
