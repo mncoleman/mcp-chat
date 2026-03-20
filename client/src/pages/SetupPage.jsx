@@ -107,11 +107,13 @@ alias claudechat='claude --dangerously-load-development-channels server:mcp-chat
             <span className="text-sm font-medium text-amber-900">Channels is a Research Preview</span>
           </div>
           <p className="text-xs text-amber-800">
-            The <code className="bg-amber-100 px-1 rounded">--channels</code> flag and the
-            <code className="bg-amber-100 px-1 rounded">--dangerously-load-development-channels</code> flag are
-            required during the research preview. As Anthropic rolls out channels to general availability,
-            this will simplify. The <code className="bg-amber-100 px-1 rounded">dangerously</code> prefix is
-            standard for custom (non-Anthropic-maintained) channel servers during the preview period.
+            The <code className="bg-amber-100 px-1 rounded">--dangerously-load-development-channels</code> flag
+            does two things: it enables the channels listener (like <code className="bg-amber-100 px-1 rounded">--channels</code>)
+            and allows loading custom channel servers. The <code className="bg-amber-100 px-1 rounded">--channels</code> flag
+            alone only works with Anthropic-maintained plugins (Telegram, Discord). Since MCP Chat is a custom server,
+            it needs the development variant. The <code className="bg-amber-100 px-1 rounded">dangerously</code> prefix
+            is standard Anthropic convention for user-controlled extensions during the research preview -- it will simplify
+            as channels reaches general availability.
           </p>
         </div>
       </div>
@@ -237,11 +239,12 @@ alias claudechat='claude --dangerously-load-development-channels server:mcp-chat
         <h2 className="text-lg font-semibold">FAQ</h2>
         <div className="space-y-3">
           <div>
-            <p className="text-sm font-medium">Do I need to start every session with the channels flag?</p>
+            <p className="text-sm font-medium">Do I need the special flag every time?</p>
             <p className="text-sm text-muted-foreground">
-              Yes, for live message receiving. Without <code className="bg-muted px-1 rounded">--channels</code>,
-              you can still use the tools to send and read messages manually, but you won't get real-time push notifications.
-              Use the shell alias to make this automatic.
+              Yes, for live message receiving. The <code className="bg-muted px-1 rounded">--dangerously-load-development-channels</code> flag
+              enables both channels and custom server loading in one flag. Without it,
+              you can still use the tools to send and read messages manually, but you won't get real-time push.
+              Use the shell alias (<code className="bg-muted px-1 rounded">claudechat</code>) to avoid typing it every time.
             </p>
           </div>
           <div>
