@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const pool = require('../db/pool');
 const { requireAdmin } = require('../middleware/auth');
 
@@ -27,7 +27,7 @@ router.post('/', requireAdmin, async (req, res) => {
       return res.status(409).json({ error: 'A user with this email already exists' });
     }
 
-    const code = uuidv4().split('-')[0];
+    const code = crypto.randomBytes(24).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
     const result = await pool.query(

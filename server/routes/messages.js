@@ -48,7 +48,10 @@ router.post('/:channelId/messages', async (req, res) => {
     if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member of this channel' });
 
     const { content, message_type = 'info', session_id, metadata } = req.body;
-    if (!content) return res.status(400).json({ error: 'content is required' });
+    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'content is required' });
+    if (content.length > 10000) return res.status(400).json({ error: 'Message too long (max 10000 characters)' });
+    const validTypes = ['info', 'recommendation', 'status', 'system'];
+    if (!validTypes.includes(message_type)) return res.status(400).json({ error: 'Invalid message_type' });
 
     const result = await pool.query(
       `INSERT INTO messages (channel_id, user_id, session_id, content, message_type, metadata)
