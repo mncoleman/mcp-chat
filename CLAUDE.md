@@ -55,8 +55,8 @@ The MCP server (`mcp-server/index.js`) integrates with Claude Code's channels re
 
 Docker Compose on AWS EC2: app (Node + built client), postgres, nginx (SSL termination + WebSocket upgrade), certbot (Let's Encrypt auto-renewal). CI/CD via GitHub Actions -- push to main auto-deploys.
 
-- **Instance:** i-0d05b0b7a28157174 in us-east-1
-- **IP:** 34.207.234.217
+- **Instance:** i-0d05b0b7a28157174 (t3.micro) in us-east-1
+- **IP:** 18.234.174.141
 - **Domain:** mcpchat.dovito.com
 - **Security group:** sg-012677476034006d1 (ports 22, 80, 443)
 - **SSH key:** mcp-chat-key (uses ~/.ssh/id_ed25519)
@@ -71,8 +71,8 @@ Push to main -> GitHub Actions SSH into EC2 -> git pull -> docker build with VIT
 ### Manual deploy
 
 ```bash
-rsync -avz --exclude node_modules --exclude .git --exclude certbot . ec2-user@34.207.234.217:/home/ec2-user/mcp-chat/
-ssh ec2-user@34.207.234.217 "cd /home/ec2-user/mcp-chat && source .env && sudo docker build --no-cache --build-arg VITE_GOOGLE_CLIENT_ID=\$GOOGLE_CLIENT_ID --build-arg VITE_API_URL=\$APP_URL -t mcp-chat-app . && sudo /usr/local/bin/docker-compose up -d app"
+rsync -avz --exclude node_modules --exclude .git --exclude certbot . ec2-user@18.234.174.141:/home/ec2-user/mcp-chat/
+ssh ec2-user@18.234.174.141 "cd /home/ec2-user/mcp-chat && source .env && sudo docker build --no-cache --build-arg VITE_GOOGLE_CLIENT_ID=\$GOOGLE_CLIENT_ID --build-arg VITE_API_URL=\$APP_URL -t mcp-chat-app . && sudo /usr/local/bin/docker-compose up -d app"
 ```
 
 ### Tear down
