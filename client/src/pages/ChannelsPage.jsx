@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import api from '@/lib/axios.js'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Hash, Users } from 'lucide-react'
+import { Plus, Hash, Users, Trash2 } from 'lucide-react'
 
 export default function ChannelsPage() {
   const queryClient = useQueryClient()
@@ -38,6 +38,21 @@ export default function ChannelsPage() {
     },
     onError: (err) => toast.error(err.response?.data?.error || 'Failed to create channel'),
   })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => api.delete(`/api/channels/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      toast.success('Channel deleted')
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to delete channel'),
+  })
+
+  const handleDelete = (ch) => {
+    if (window.confirm(`Delete #${ch.name}? This will remove all messages and members.`)) {
+      deleteMutation.mutate(ch.id)
+    }
+  }
 
   const handleCreate = (e) => {
     e.preventDefault()
@@ -138,6 +153,14 @@ export default function ChannelsPage() {
               <Badge variant="secondary" className="gap-1">
                 <Users className="h-3 w-3" /> {ch.member_count || 0}
               </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                onClick={() => handleDelete(ch)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         ))}
