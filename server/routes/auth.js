@@ -109,9 +109,27 @@ router.get('/me', async (req, res) => {
   }
   try {
     const payload = jwt.verify(authHeader.slice(7), JWT_SECRET);
-    const result = await pool.query('SELECT id, email, name, avatar_url, role FROM users WHERE id = $1', [payload.id]);
+    const result = await pool.query('SELECT id, email, name, avatar_url, role, is_active FROM users WHERE id = $1', [payload.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    res.json(result.rows[0]);
+
+    const user = result.rows[0];
+
+    // If user was deactivated, reject
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'Account deactivated' });
+    }
+
+    // If role changed since token was issued, send a fresh token
+    let newToken = null;
+    if (payload.role !== user.role) {
+      newToken = jwt.sign(
+        { id: user.id, email: user.email, name: user.name, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+    }
+
+    res.json({ ...user, token: newToken });
   } catch {
     res.status(401).json({ error: 'Invalid token' });
   }
