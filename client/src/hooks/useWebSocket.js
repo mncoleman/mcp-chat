@@ -24,7 +24,19 @@ export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
-      if (data.type === 'new_message') {
+      if (data.type === 'connected' && data.online) {
+        // Initialize presence from server's current online list
+        const initial = {}
+        for (const u of data.online) {
+          initial[`${u.user_id}-${u.session_token || 'browser'}`] = {
+            user_id: u.user_id,
+            user_name: u.user_name,
+            session_token: u.session_token,
+            status: 'connected',
+          }
+        }
+        setPresence(initial)
+      } else if (data.type === 'new_message') {
         setMessages((prev) => [...prev, data.message])
       } else if (data.type === 'presence') {
         setPresence((prev) => {
@@ -41,7 +53,7 @@ export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
           }
           return next
         })
-        // Notify when a Claude session (has session_token) connects/disconnects
+        // Notify when a Claude session connects/disconnects
         if (data.session_token && onSessionPresenceChangeRef.current) {
           onSessionPresenceChangeRef.current()
         }
