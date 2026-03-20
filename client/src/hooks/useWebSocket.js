@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-export function useWebSocket(channelId) {
+export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
   const wsRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [presence, setPresence] = useState({})
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef(null)
+  const onSessionPresenceChangeRef = useRef(onSessionPresenceChange)
+  onSessionPresenceChangeRef.current = onSessionPresenceChange
 
   const connect = useCallback(() => {
     const token = localStorage.getItem('token')
@@ -39,12 +41,15 @@ export function useWebSocket(channelId) {
           }
           return next
         })
+        // Notify when a Claude session (has session_token) connects/disconnects
+        if (data.session_token && onSessionPresenceChangeRef.current) {
+          onSessionPresenceChangeRef.current()
+        }
       }
     }
 
     ws.onclose = () => {
       setIsConnected(false)
-      // Reconnect after 3 seconds
       reconnectTimeoutRef.current = setTimeout(connect, 3000)
     }
 

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/context/AuthContext.jsx'
 import { useWebSocket } from '@/hooks/useWebSocket.js'
@@ -15,9 +15,17 @@ import { Send, Hash, Wifi, WifiOff, Monitor, Terminal } from 'lucide-react'
 export default function ChatPage() {
   const { channelId } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { user } = useAuth()
   const [input, setInput] = useState('')
   const messagesEndRef = useRef(null)
+
+  // Refetch channel details when a Claude session connects/disconnects
+  const onSessionPresenceChange = useCallback(() => {
+    if (channelId) {
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+    }
+  }, [channelId, queryClient])
 
   // Fetch user's channels
   const { data: channels = [] } = useQuery({
@@ -47,7 +55,7 @@ export default function ChatPage() {
   })
 
   // WebSocket for real-time
-  const { messages: wsMessages, presence, isConnected, sendMessage } = useWebSocket(channelId)
+  const { messages: wsMessages, presence, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange })
 
   // Combine history + live messages
   const allMessages = [...history, ...wsMessages]
@@ -129,33 +137,44 @@ export default function ChatPage() {
           <ScrollArea className="flex-1 p-4">
             <div className="space-y-0.5 max-w-3xl mx-auto">
               {allMessages.map((msg, i) => {
+                const isFromClaude = !!msg.session_id
                 const isOwn = msg.user_id === user?.id
+                const displayName = isFromClaude
+                  ? `${msg.user_name?.split(' ')[0]}'s Claude`
+                  : msg.user_name
                 const prev = allMessages[i - 1]
+                const prevIsFromClaude = !!prev?.session_id
                 const isGrouped = prev && prev.user_id === msg.user_id &&
+                  prevIsFromClaude === isFromClaude &&
                   (new Date(msg.created_at) - new Date(prev.created_at)) < 120000
                 const showHeader = !isGrouped
 
                 return (
                   <div key={msg.id || `ws-${i}`} className={cn(
                     'flex gap-2',
-                    isOwn && 'flex-row-reverse',
+                    isOwn && !isFromClaude && 'flex-row-reverse',
                     showHeader ? 'mt-4 first:mt-0' : 'mt-0.5',
                   )}>
                     {showHeader ? (
-                      <Avatar className="h-7 w-7 shrink-0 mt-0.5">
-                        <AvatarImage src={msg.user_avatar} />
-                        <AvatarFallback className="text-xs">{msg.user_name?.[0]?.toUpperCase()}</AvatarFallback>
-                      </Avatar>
+                      isFromClaude ? (
+                        <div className="h-7 w-7 shrink-0 mt-0.5 rounded-full bg-violet-100 flex items-center justify-center">
+                          <Terminal className="h-3.5 w-3.5 text-violet-600" />
+                        </div>
+                      ) : (
+                        <Avatar className="h-7 w-7 shrink-0 mt-0.5">
+                          <AvatarImage src={msg.user_avatar} />
+                          <AvatarFallback className="text-xs">{msg.user_name?.[0]?.toUpperCase()}</AvatarFallback>
+                        </Avatar>
+                      )
                     ) : (
                       <div className="w-7 shrink-0" />
                     )}
-                    <div className={cn('max-w-[70%] min-w-0', isOwn && 'text-right')}>
+                    <div className={cn('max-w-[70%] min-w-0', isOwn && !isFromClaude && 'text-right')}>
                       {showHeader && (
-                        <div className={cn('flex items-center gap-1.5 mb-0.5', isOwn && 'flex-row-reverse')}>
-                          <span className="text-xs font-medium">{msg.user_name}</span>
-                          {msg.session_id && (
-                            <Terminal className="h-3 w-3 text-muted-foreground" title="Sent from Claude Code session" />
-                          )}
+                        <div className={cn('flex items-center gap-1.5 mb-0.5', isOwn && !isFromClaude && 'flex-row-reverse')}>
+                          <span className={cn('text-xs font-medium', isFromClaude && 'text-violet-700')}>
+                            {displayName}
+                          </span>
                           <span className="text-[10px] text-muted-foreground">
                             {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
@@ -163,13 +182,15 @@ export default function ChatPage() {
                       )}
                       <div className={cn(
                         'inline-block rounded-2xl px-3 py-1 text-sm leading-snug',
-                        isOwn
-                          ? 'bg-primary text-primary-foreground'
-                          : messageTypeStyles[msg.message_type] || 'bg-muted',
+                        isFromClaude
+                          ? 'bg-violet-50 border border-violet-200 text-violet-900'
+                          : isOwn
+                            ? 'bg-primary text-primary-foreground'
+                            : messageTypeStyles[msg.message_type] || 'bg-muted',
                       )}>
                         {msg.content}
                       </div>
-                      {msg.message_type && msg.message_type !== 'info' && !isOwn && (
+                      {msg.message_type && msg.message_type !== 'info' && !isOwn && !isFromClaude && (
                         <Badge variant="outline" className="mt-0.5 text-[10px]">{msg.message_type}</Badge>
                       )}
                     </div>
@@ -213,6 +234,7 @@ export default function ChatPage() {
             {channelDetails?.members?.map((member) => {
               const memberPresence = Object.values(presence).filter(p => p.user_id === member.id)
               const isOnline = memberPresence.length > 0
+              const hasClaudeSession = channelDetails?.active_sessions?.some(s => s.user_id === member.id)
               return (
                 <div key={member.id} className="flex items-center gap-2 px-2 py-1.5">
                   <div className="relative">
@@ -227,7 +249,7 @@ export default function ChatPage() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate">{member.name}</p>
-                    {memberPresence.some(p => p.session_token) && (
+                    {hasClaudeSession && (
                       <p className="text-xs text-muted-foreground flex items-center gap-1">
                         <Terminal className="h-3 w-3" /> Claude session
                       </p>

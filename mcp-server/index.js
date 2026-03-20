@@ -98,12 +98,17 @@ function connectWebSocket() {
 
       if (data.type === 'new_message') {
         const msg = data.message;
-        // Don't echo back messages sent by this user's session
-        if (msg.user_id === sessionState.userId) return;
+        // Don't echo back messages sent by this Claude session itself
+        // But DO receive messages from the same user's browser UI
+        if (msg.session_id === sessionState.sessionToken) return;
+
+        const senderLabel = msg.session_id
+          ? `${msg.user_name?.split(' ')[0]}'s Claude`
+          : msg.user_name || 'unknown';
 
         pushChannelMessage('mcp-chat', msg.content, {
           channel: sessionState.channelName,
-          user: msg.user_name || 'unknown',
+          user: senderLabel,
           message_type: msg.message_type || 'info',
           timestamp: msg.created_at || new Date().toISOString(),
         });
