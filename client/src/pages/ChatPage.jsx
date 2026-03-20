@@ -127,34 +127,50 @@ export default function ChatPage() {
 
           {/* Messages */}
           <ScrollArea className="flex-1 p-4">
-            <div className="space-y-3 max-w-3xl mx-auto">
+            <div className="space-y-0.5 max-w-3xl mx-auto">
               {allMessages.map((msg, i) => {
                 const isOwn = msg.user_id === user?.id
+                const prev = allMessages[i - 1]
+                const isGrouped = prev && prev.user_id === msg.user_id &&
+                  (new Date(msg.created_at) - new Date(prev.created_at)) < 120000
+                const showHeader = !isGrouped
+
                 return (
-                  <div key={msg.id || `ws-${i}`} className={cn('flex gap-3', isOwn && 'flex-row-reverse')}>
-                    <Avatar className="h-8 w-8 shrink-0">
-                      <AvatarImage src={msg.user_avatar} />
-                      <AvatarFallback>{msg.user_name?.[0]?.toUpperCase()}</AvatarFallback>
-                    </Avatar>
-                    <div className={cn('max-w-[70%]', isOwn && 'text-right')}>
-                      <div className={cn('flex items-center gap-2 mb-1', isOwn && 'flex-row-reverse')}>
-                        <span className="text-sm font-medium">{msg.user_name}</span>
-                        {msg.session_id && (
-                          <Terminal className="h-3 w-3 text-muted-foreground" title="Sent from Claude Code session" />
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
+                  <div key={msg.id || `ws-${i}`} className={cn(
+                    'flex gap-2',
+                    isOwn && 'flex-row-reverse',
+                    showHeader ? 'mt-4 first:mt-0' : 'mt-0.5',
+                  )}>
+                    {showHeader ? (
+                      <Avatar className="h-7 w-7 shrink-0 mt-0.5">
+                        <AvatarImage src={msg.user_avatar} />
+                        <AvatarFallback className="text-xs">{msg.user_name?.[0]?.toUpperCase()}</AvatarFallback>
+                      </Avatar>
+                    ) : (
+                      <div className="w-7 shrink-0" />
+                    )}
+                    <div className={cn('max-w-[70%] min-w-0', isOwn && 'text-right')}>
+                      {showHeader && (
+                        <div className={cn('flex items-center gap-1.5 mb-0.5', isOwn && 'flex-row-reverse')}>
+                          <span className="text-xs font-medium">{msg.user_name}</span>
+                          {msg.session_id && (
+                            <Terminal className="h-3 w-3 text-muted-foreground" title="Sent from Claude Code session" />
+                          )}
+                          <span className="text-[10px] text-muted-foreground">
+                            {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      )}
                       <div className={cn(
-                        'rounded-lg border px-3 py-2 text-sm',
-                        messageTypeStyles[msg.message_type] || 'bg-muted',
-                        isOwn && 'bg-primary text-primary-foreground border-primary',
+                        'inline-block rounded-2xl px-3 py-1 text-sm leading-snug',
+                        isOwn
+                          ? 'bg-primary text-primary-foreground'
+                          : messageTypeStyles[msg.message_type] || 'bg-muted',
                       )}>
                         {msg.content}
                       </div>
                       {msg.message_type && msg.message_type !== 'info' && !isOwn && (
-                        <Badge variant="outline" className="mt-1 text-xs">{msg.message_type}</Badge>
+                        <Badge variant="outline" className="mt-0.5 text-[10px]">{msg.message_type}</Badge>
                       )}
                     </div>
                   </div>
