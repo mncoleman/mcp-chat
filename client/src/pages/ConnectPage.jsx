@@ -1,20 +1,25 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { GoogleLogin } from '@react-oauth/google'
 import { toast } from 'sonner'
 import { useAuth } from '@/context/AuthContext.jsx'
 import api from '@/lib/axios.js'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Radio, Hash, Check, Terminal } from 'lucide-react'
+import { Radio, Hash, Check, Terminal, Plus } from 'lucide-react'
 
 export default function ConnectPage() {
   const [searchParams] = useSearchParams()
   const callbackUrl = searchParams.get('callback')
+  const queryClient = useQueryClient()
   const { token, user, isAuthenticated, loginWithGoogle } = useAuth()
   const [selectedChannel, setSelectedChannel] = useState(null)
   const [connecting, setConnecting] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newDesc, setNewDesc] = useState('')
+  const [creating, setCreating] = useState(false)
 
   const { data: channels = [] } = useQuery({
     queryKey: ['channels'],
@@ -35,6 +40,29 @@ export default function ConnectPage() {
     })
 
     window.location.href = `${callbackUrl}?${params.toString()}`
+  }
+
+  const handleCreate = async (e) => {
+    e.preventDefault()
+    if (!newName.trim()) return
+    setCreating(true)
+    try {
+      const res = await api.post('/api/channels', {
+        name: newName.trim(),
+        description: newDesc.trim() || null,
+      })
+      const newChannel = res.data
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      setSelectedChannel(newChannel.id)
+      setShowCreate(false)
+      setNewName('')
+      setNewDesc('')
+      toast.success(`#${newChannel.name} created`)
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create channel')
+    } finally {
+      setCreating(false)
+    }
   }
 
   if (!callbackUrl) {
@@ -95,17 +123,60 @@ export default function ConnectPage() {
           </div>
         )}
 
-        {/* Step 2: Pick channel */}
+        {/* Step 2: Pick or create channel */}
         {isAuthenticated && (
           <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">2</Badge>
-              <span className="font-semibold">Choose a channel</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">2</Badge>
+                <span className="font-semibold">Choose a channel</span>
+              </div>
+              {user?.role === 'admin' && !showCreate && (
+                <button
+                  onClick={() => setShowCreate(true)}
+                  className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
+                >
+                  <Plus className="h-3 w-3" /> New channel
+                </button>
+              )}
             </div>
 
-            {channels.length === 0 ? (
+            {/* Create new channel form */}
+            {showCreate && (
+              <form onSubmit={handleCreate} className="border rounded-lg p-3 space-y-2">
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Channel name"
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                  autoFocus
+                  required
+                />
+                <input
+                  type="text"
+                  value={newDesc}
+                  onChange={(e) => setNewDesc(e.target.value)}
+                  placeholder="Description (optional)"
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                />
+                <div className="flex gap-2">
+                  <Button type="submit" size="sm" disabled={!newName.trim() || creating}>
+                    {creating ? 'Creating...' : 'Create'}
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setShowCreate(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            )}
+
+            {/* Channel list */}
+            {channels.length === 0 && !showCreate ? (
               <div className="border rounded-lg p-4 text-center text-sm text-muted-foreground">
-                No channels available. Ask an admin to add you to a channel.
+                {user?.role === 'admin'
+                  ? 'No channels yet. Create one to get started.'
+                  : 'No channels available. Ask an admin to add you to a channel.'}
               </div>
             ) : (
               <div className="space-y-2">
