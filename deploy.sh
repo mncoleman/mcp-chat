@@ -4,8 +4,8 @@
 
 set -e
 
-DOMAIN="mcpchat.dovito.com"
-EMAIL="matthew@dovito.com"  # For Let's Encrypt notifications
+DOMAIN="your-domain.com"
+EMAIL="your-email@example.com"  # For Let's Encrypt notifications
 
 echo "=== MCP Chat Deployment ==="
 
@@ -34,7 +34,7 @@ if [ ! -f .env ]; then
 DB_PASSWORD=CHANGE_ME_STRONG_PASSWORD
 JWT_SECRET=CHANGE_ME_RANDOM_STRING
 GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID
-APP_URL=https://mcpchat.dovito.com
+APP_URL=https://your-domain.com
 ENVEOF
   echo "IMPORTANT: Edit .env with your actual values before continuing!"
   exit 1

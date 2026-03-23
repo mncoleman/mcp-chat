@@ -41,10 +41,10 @@ APP_URL=https://your-domain.com
 
 ### 2. Update nginx.conf
 
-Replace `mcpchat.dovito.com` with your domain in `nginx.conf`:
+Replace `your-domain.com` with your actual domain in `nginx.conf`:
 
 ```bash
-sed -i 's/mcpchat.dovito.com/your-domain.com/g' nginx.conf
+sed -i 's/your-domain.com/actual-domain.com/g' nginx.conf
 ```
 
 ### 3. Update deploy.sh
