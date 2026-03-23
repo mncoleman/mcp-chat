@@ -29,6 +29,13 @@ export default function ConnectPage() {
 
   const handleConnect = () => {
     if (!selectedChannel || !callbackUrl) return
+
+    // Only allow callbacks to localhost (the MCP server's local HTTP listener)
+    if (!callbackUrl.startsWith('http://127.0.0.1:') && !callbackUrl.startsWith('http://localhost:')) {
+      toast.error('Invalid callback URL')
+      return
+    }
+
     setConnecting(true)
 
     const channel = channels.find(c => c.id === selectedChannel)

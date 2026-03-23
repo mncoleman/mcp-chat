@@ -118,10 +118,15 @@ function setupMcpRoutes(app) {
     try {
       switch (tool) {
         case 'send_message': {
-          const { channel_id, content, message_type = 'info', session_token } = args;
-          if (!channel_id || !content) {
-            return res.json({ error: 'channel_id and content are required' });
+          const { channel_id, content, session_token } = args;
+          if (!channel_id || !content || typeof content !== 'string') {
+            return res.json({ error: 'channel_id and content (string) are required' });
           }
+          if (content.length > 10000) {
+            return res.json({ error: 'Message too long (max 10000 characters)' });
+          }
+          const validTypes = ['info', 'recommendation', 'status', 'system'];
+          const message_type = validTypes.includes(args.message_type) ? args.message_type : 'info';
 
           // Verify channel membership
           const sendMemberCheck = await pool.query(
@@ -322,7 +327,7 @@ function setupMcpRoutes(app) {
           return res.json({ error: `Unknown tool: ${tool}` });
       }
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      console.error('[mcp]', err); res.status(500).json({ error: 'Internal server error' });
     }
   });
 

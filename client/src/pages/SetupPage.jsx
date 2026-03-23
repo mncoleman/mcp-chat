@@ -60,7 +60,7 @@ claude mcp add -e MCP_CHAT_URL=${baseUrl} -s user mcp-chat $(which mcp-chat-conn
 3. Add this shell alias to my ~/.zshrc (or ~/.bashrc):
 echo '' >> ~/.zshrc
 echo '# MCP Chat - Claude Code with channels' >> ~/.zshrc
-echo "alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'" >> ~/.zshrc
+echo "alias claudechat='claude --dangerously-load-development-channels server:mcp-chat '" >> ~/.zshrc
 
 4. Verify the server is connected:
 claude mcp get mcp-chat
@@ -68,9 +68,9 @@ claude mcp get mcp-chat
 After setup, tell me to run "source ~/.zshrc" and then I can start a session with "claudechat".`
 
   const shellAlias = `# Add to your ~/.zshrc or ~/.bashrc
-alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'`
+alias claudechat='claude --dangerously-load-development-channels server:mcp-chat '`
 
-  const launchCommand = 'claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
+  const launchCommand = 'claude --dangerously-load-development-channels server:mcp-chat '
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-8 overflow-y-auto h-full">

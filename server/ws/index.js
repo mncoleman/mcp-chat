@@ -38,8 +38,13 @@ function setupWebSocket(server) {
       return;
     }
 
-    // If session token provided, upsert session as connected
+    // If session token provided, verify ownership and upsert session as connected
     if (sessionToken) {
+      const existing = await pool.query('SELECT user_id FROM sessions WHERE session_token = $1', [sessionToken]);
+      if (existing.rows.length > 0 && existing.rows[0].user_id !== user.id) {
+        ws.close(4003, 'Session token belongs to another user');
+        return;
+      }
       await pool.query(
         `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
          VALUES ($1, $2, $3, $4, true, NOW())
@@ -82,10 +87,18 @@ function setupWebSocket(server) {
       try {
         const data = JSON.parse(raw);
         if (data.type === 'message') {
+          if (!data.content || typeof data.content !== 'string') return;
+          if (data.content.length > 10000) {
+            ws.send(JSON.stringify({ type: 'error', error: 'Message too long (max 10000 characters)' }));
+            return;
+          }
+          const validTypes = ['info', 'recommendation', 'status', 'system'];
+          const messageType = validTypes.includes(data.message_type) ? data.message_type : 'info';
+
           const result = await pool.query(
             `INSERT INTO messages (channel_id, user_id, session_id, content, message_type, metadata)
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [channelId, user.id, sessionToken || null, data.content, data.message_type || 'info', JSON.stringify(data.metadata || {})]
+            [channelId, user.id, sessionToken || null, data.content, messageType, JSON.stringify(data.metadata || {})]
           );
           const message = result.rows[0];
           message.user_name = user.name;
@@ -94,7 +107,8 @@ function setupWebSocket(server) {
           ws.send(JSON.stringify({ type: 'pong' }));
         }
       } catch (err) {
-        ws.send(JSON.stringify({ type: 'error', error: err.message }));
+        console.error('[ws] message error:', err);
+        ws.send(JSON.stringify({ type: 'error', error: 'Failed to send message' }));
       }
     });
 
