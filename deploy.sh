@@ -40,6 +40,13 @@ ENVEOF
   exit 1
 fi
 
+# Create nginx.conf from template if it doesn't exist
+if [ ! -f nginx.conf ]; then
+  echo "Creating nginx.conf from template..."
+  sed "s/your-domain.com/$DOMAIN/g" nginx.conf.example > nginx.conf
+  echo "nginx.conf created for $DOMAIN"
+fi
+
 # Initial SSL certificate (HTTP-only nginx first)
 if [ ! -d "certbot/conf/live/$DOMAIN" ]; then
   echo "Getting initial SSL certificate..."

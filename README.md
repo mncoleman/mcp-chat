@@ -39,17 +39,15 @@ GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
 APP_URL=https://your-domain.com
 ```
 
-### 2. Update nginx.conf
-
-Replace `your-domain.com` with your actual domain in `nginx.conf`:
+### 2. Create nginx.conf
 
 ```bash
-sed -i 's/your-domain.com/actual-domain.com/g' nginx.conf
+sed 's/your-domain.com/actual-domain.com/g' nginx.conf.example > nginx.conf
 ```
 
 ### 3. Update deploy.sh
 
-Replace the domain and email in `deploy.sh` with your own, then run:
+Replace the `DOMAIN` and `EMAIL` variables in `deploy.sh` with your own, then run:
 
 ```bash
 ./deploy.sh
@@ -140,7 +138,7 @@ mcp-chat/
 ├── .github/workflows/         CI/CD (auto-deploy on push to main)
 ├── Dockerfile                 Multi-stage build (client + server)
 ├── docker-compose.yml         Full stack: app + postgres + nginx + certbot
-├── nginx.conf                 Reverse proxy with SSL + WebSocket upgrade
+├── nginx.conf.example         Reverse proxy template (copy to nginx.conf with your domain)
 └── deploy.sh                  Server bootstrap script
 ```
 

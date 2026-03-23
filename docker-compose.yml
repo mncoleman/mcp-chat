@@ -27,6 +27,8 @@ services:
       DB_NAME: mcp_chat
       JWT_SECRET: ${JWT_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      ALLOWED_ORIGINS: ${APP_URL:-http://localhost:5173}
+      MCP_CONNECT_LATEST: ${MCP_CONNECT_LATEST:-1.2.0}
     ports:
       - "4000:4000"
     depends_on:
