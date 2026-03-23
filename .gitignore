@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 .env.local
+nginx.conf
 certbot/
 *.log
 .DS_Store
