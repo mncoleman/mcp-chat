@@ -317,6 +317,17 @@ function getTools() {
       inputSchema: { type: 'object', properties: {} },
     },
     {
+      name: 'mcp_chat_join',
+      description: 'Connect to a specific MCP Chat channel by ID without opening a browser. Requires prior authentication (saved token from a previous mcp_chat_connect). Used by agents to join channels created by the parent session.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_id: { type: 'number', description: 'Channel ID to join' },
+        },
+        required: ['channel_id'],
+      },
+    },
+    {
       name: 'mcp_chat_create_channel',
       description: 'Create a new MCP Chat channel. You become the admin.',
       inputSchema: {
@@ -397,6 +408,40 @@ async function handleToolCall(name, args) {
         return { content: [{ type: 'text', text: responseText }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Connection failed: ${err.message}` }], isError: true };
+      }
+    }
+
+    case 'mcp_chat_join': {
+      if (!sessionState.token) {
+        return { content: [{ type: 'text', text: 'Not authenticated. A user must run mcp_chat_connect first to save credentials.' }], isError: true };
+      }
+      const channelId = parseInt(args.channel_id, 10);
+      if (!channelId || isNaN(channelId)) {
+        return { content: [{ type: 'text', text: 'Valid channel_id is required.' }], isError: true };
+      }
+
+      // Verify we can access this channel
+      try {
+        const channelsResult = await apiCall('list_channels', {}, sessionState.token);
+        const channel = channelsResult.channels?.find(c => c.id === channelId);
+        if (!channel) {
+          return { content: [{ type: 'text', text: `Channel ${channelId} not found or you are not a member.` }], isError: true };
+        }
+
+        disconnectWebSocket();
+        const sessionToken = `mcp-${crypto.randomBytes(16).toString('hex')}`;
+        sessionState = {
+          ...sessionState,
+          channelId,
+          channelName: channel.name,
+          sessionToken,
+          connected: true,
+        };
+
+        connectWebSocket();
+        return { content: [{ type: 'text', text: `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName}. Live messages are now being pushed.` }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Failed to join channel: ${err.message}` }], isError: true };
       }
     }
 
