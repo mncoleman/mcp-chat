@@ -19,6 +19,8 @@ if (!MCP_CHAT_URL) {
   process.exit(1);
 }
 
+const LOCAL_VERSION = require('./package.json').version;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
@@ -61,6 +63,20 @@ async function apiCall(tool, args, token) {
     throw new Error(`API error: ${response.status} ${response.statusText}`);
   }
   return response.json();
+}
+
+// ─── Version check ──────────────────────────────────────────────────────────
+
+async function checkForUpdate() {
+  try {
+    const response = await fetch(`${MCP_CHAT_URL}/api/version`);
+    if (!response.ok) return null;
+    const { latest } = await response.json();
+    if (latest && latest !== LOCAL_VERSION) {
+      return `UPDATE AVAILABLE: You are running mcp-chat-connect v${LOCAL_VERSION}, but v${latest} is available. Run: npm install -g mcp-chat-connect`;
+    }
+  } catch {}
+  return null;
 }
 
 // ─── Channel notification (push messages into Claude's context) ──────────────
@@ -334,7 +350,14 @@ async function handleToolCall(name, args) {
         // Start WebSocket listener for real-time push
         connectWebSocket();
 
-        return { content: [{ type: 'text', text: `Connected to #${result.channelName} as ${result.userName}. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.` }] };
+        // Check for package updates
+        const updateNotice = await checkForUpdate();
+        let responseText = `Connected to #${result.channelName} as ${result.userName}. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
+        if (updateNotice) {
+          responseText += `\n\n${updateNotice}`;
+        }
+
+        return { content: [{ type: 'text', text: responseText }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Connection failed: ${err.message}` }], isError: true };
       }
