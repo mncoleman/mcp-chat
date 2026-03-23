@@ -98,6 +98,8 @@ The `mcp-chat-connect` package requires 2FA for npm publish. Claude cannot publi
 cd mcp-server && npm publish
 ```
 
+After every version bump, also update the `MCP_CONNECT_LATEST` default in `server/index.js` to match the new version so the version check endpoint returns the correct latest version. If deploying with env vars, update the `MCP_CONNECT_LATEST` env var on the server as well.
+
 ## Rules
 
 - No emojis in code, comments, or UI text
