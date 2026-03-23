@@ -1,10 +1,17 @@
+import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/context/AuthContext.jsx'
 import { MessageSquare, Users, Hash, X, Radio, Settings } from 'lucide-react'
+import api from '@/lib/axios'
 
 export default function AppSidebar({ collapsed, mobileOpen, onMobileClose }) {
   const { user } = useAuth()
+  const [version, setVersion] = useState(null)
+
+  useEffect(() => {
+    api.get('/api/version').then(res => setVersion(res.data.latest)).catch(() => {})
+  }, [])
   const isAdmin = user?.role === 'admin'
 
   const navItems = [
@@ -72,6 +79,15 @@ export default function AppSidebar({ collapsed, mobileOpen, onMobileClose }) {
           )
         })}
       </nav>
+
+      {version && (
+        <div className={cn(
+          'px-4 py-3 border-t border-sidebar-border text-xs text-sidebar-foreground/50',
+          collapsed && 'px-2 text-center',
+        )}>
+          {collapsed ? `v${version}` : `MCP Chat v${version}`}
+        </div>
+      )}
     </aside>
   )
 }
