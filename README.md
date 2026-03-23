@@ -168,8 +168,13 @@ The MCP server declares `experimental: { 'claude/channel': {} }` capability and 
 | `mcp_chat_presence` | See who is online and active sessions |
 | `mcp_chat_channels` | List available channels |
 | `mcp_chat_status` | Check connection and WebSocket health |
+| `mcp_chat_create_channel` | Create a new channel (you become admin) |
+| `mcp_chat_add_member` | Add a user to a channel by ID or email (channel admin) |
+| `mcp_chat_modify_channel` | Update channel name and/or description (channel admin) |
 
 ## Environment variables
+
+### Server
 
 | Variable | Description |
 |----------|-------------|
@@ -182,6 +187,19 @@ The MCP server declares `experimental: { 'claude/channel': {} }` capability and 
 | `GOOGLE_CLIENT_ID` | Google OAuth Client ID |
 | `PORT` | Server port (default: 4000) |
 | `ALLOWED_ORIGINS` | Comma-separated CORS origins |
+| `MCP_CONNECT_LATEST` | Latest mcp-chat-connect version for update checks (default: 1.2.0) |
+
+### MCP client (npm package)
+
+| Variable | Description |
+|----------|-------------|
+| `MCP_CHAT_URL` | URL of your MCP Chat server (required, no default) |
+
+## Auto-update notifications
+
+The npm package checks for updates on every `mcp_chat_connect`. The server exposes `GET /api/version` returning the latest version. If the installed package is behind, Claude sees a notice in the tool response and can prompt the user to update.
+
+When publishing a new version, update `MCP_CONNECT_LATEST` in `server/index.js` (or set the env var on your server) to match.
 
 ## Development
 
