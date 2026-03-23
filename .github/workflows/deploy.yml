@@ -23,7 +23,7 @@ jobs:
             # Always regenerate nginx.conf from template with correct domain
             DOMAIN=$(echo $APP_URL | sed 's|https://||')
             sed "s/your-domain.com/$DOMAIN/g" nginx.conf.example > nginx.conf
-            sudo docker build --no-cache \
+            sudo docker build \
               --build-arg VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
               --build-arg VITE_API_URL=$APP_URL \
               -t mcp-chat-app .
