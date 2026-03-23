@@ -14,8 +14,9 @@ router.get('/:channelId/messages', async (req, res) => {
     );
     if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member of this channel' });
 
-    const { before, limit = 50 } = req.query;
-    const params = [req.params.channelId, Math.min(parseInt(limit), 100)];
+    const { before, limit: limitRaw = '50' } = req.query;
+    const parsedLimit = parseInt(limitRaw, 10);
+    const params = [req.params.channelId, isNaN(parsedLimit) || parsedLimit < 1 ? 50 : Math.min(parsedLimit, 100)];
     let query = `
       SELECT m.*, u.name as user_name, u.avatar_url as user_avatar
       FROM messages m
@@ -23,15 +24,17 @@ router.get('/:channelId/messages', async (req, res) => {
       WHERE m.channel_id = $1
     `;
     if (before) {
+      const parsedBefore = parseInt(before, 10);
+      if (isNaN(parsedBefore)) return res.status(400).json({ error: 'Invalid before parameter' });
       query += ' AND m.id < $3';
-      params.push(parseInt(before));
+      params.push(parsedBefore);
     }
     query += ' ORDER BY m.created_at DESC LIMIT $2';
 
     const result = await pool.query(query, params);
     res.json(result.rows.reverse());
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[messages]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -75,7 +78,7 @@ router.post('/:channelId/messages', async (req, res) => {
 
     res.status(201).json(message);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[messages]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 

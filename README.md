@@ -83,7 +83,7 @@ Paste this into any Claude Code session (replace `YOUR_INSTANCE_URL` with your s
 Set up MCP Chat for my Claude Code environment. Run these commands:
 1. npm install -g mcp-chat-connect
 2. claude mcp add -e MCP_CHAT_URL=YOUR_INSTANCE_URL -s user mcp-chat $(which mcp-chat-connect)
-3. Add alias to ~/.zshrc: alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
+3. Add alias to ~/.zshrc: alias claudechat='claude --dangerously-load-development-channels server:mcp-chat'
 4. Verify: claude mcp get mcp-chat
 ```
 
@@ -97,7 +97,7 @@ npm install -g mcp-chat-connect
 claude mcp add -e MCP_CHAT_URL=YOUR_INSTANCE_URL -s user mcp-chat $(which mcp-chat-connect)
 
 # Add shell alias for quick launch
-echo "alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'" >> ~/.zshrc
+echo "alias claudechat='claude --dangerously-load-development-channels server:mcp-chat'" >> ~/.zshrc
 source ~/.zshrc
 ```
 

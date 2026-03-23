@@ -33,7 +33,7 @@ router.get('/', async (req, res) => {
     }
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -76,7 +76,7 @@ router.post('/', async (req, res) => {
     res.status(201).json(channel);
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   } finally {
     client.release();
   }
@@ -123,7 +123,7 @@ router.get('/:id', async (req, res) => {
       active_sessions: sessionsResult.rows,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -141,7 +141,7 @@ router.post('/:id/members', requireAdmin, async (req, res) => {
     );
     res.status(201).json({ message: 'Member added' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -156,7 +156,7 @@ router.delete('/:id/members/:userId', requireAdmin, async (req, res) => {
     );
     res.json({ message: 'Member removed' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -169,7 +169,7 @@ router.delete('/:id', requireAdmin, async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
     res.json({ message: `Channel #${result.rows[0].name} deleted` });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 

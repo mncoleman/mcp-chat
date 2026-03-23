@@ -35,6 +35,9 @@ RUN echo 'const path = require("path");' > server/static.js && \
     echo '  });' >> server/static.js && \
     echo '};' >> server/static.js
 
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
 EXPOSE 4000
 
 CMD ["node", "server/index.js"]

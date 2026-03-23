@@ -36,7 +36,7 @@ router.post('/', requireAdmin, async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[invites]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -54,7 +54,7 @@ router.get('/', requireAdmin, async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[invites]', err); res.status(500).json({ error: 'Internal server error' });
   }
 });
 
