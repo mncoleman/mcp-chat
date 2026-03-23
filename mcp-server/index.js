@@ -316,6 +316,43 @@ function getTools() {
       description: 'Check your current MCP Chat connection status.',
       inputSchema: { type: 'object', properties: {} },
     },
+    {
+      name: 'mcp_chat_create_channel',
+      description: 'Create a new MCP Chat channel. You become the admin.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Channel name' },
+          description: { type: 'string', description: 'Channel description' },
+          member_ids: { type: 'array', items: { type: 'number' }, description: 'User IDs to add as members' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'mcp_chat_add_member',
+      description: 'Add a user to a channel (requires channel admin). Specify user by ID or email.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_id: { type: 'number', description: 'Channel ID (defaults to connected channel)' },
+          user_id: { type: 'number', description: 'User ID to add' },
+          email: { type: 'string', description: 'Email of user to add (alternative to user_id)' },
+        },
+      },
+    },
+    {
+      name: 'mcp_chat_modify_channel',
+      description: 'Update a channel name and/or description (requires channel admin).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_id: { type: 'number', description: 'Channel ID (defaults to connected channel)' },
+          name: { type: 'string', description: 'New channel name' },
+          description: { type: 'string', description: 'New channel description' },
+        },
+      },
+    },
   ];
 }
 
@@ -433,6 +470,52 @@ async function handleToolCall(name, args) {
       }
       const wsStatus = wsConnection?.readyState === 1 ? 'live (receiving messages)' : 'reconnecting...';
       return { content: [{ type: 'text', text: `Connected to #${sessionState.channelName} as ${sessionState.userName}\nWebSocket: ${wsStatus}` }] };
+    }
+
+    case 'mcp_chat_create_channel': {
+      if (!sessionState.token) {
+        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_connect first.' }], isError: true };
+      }
+      const channelName = String(args.name || '').trim();
+      if (!channelName) return { content: [{ type: 'text', text: 'Channel name is required.' }], isError: true };
+      const result = await apiCall('create_channel', {
+        name: channelName,
+        description: args.description || null,
+        member_ids: args.member_ids || [],
+      }, sessionState.token);
+      if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      return { content: [{ type: 'text', text: `Channel #${result.channel.name} created (ID: ${result.channel.id})${result.channel.description ? ` -- ${result.channel.description}` : ''}` }] };
+    }
+
+    case 'mcp_chat_add_member': {
+      if (!sessionState.token) {
+        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_connect first.' }], isError: true };
+      }
+      const channelId = args.channel_id || sessionState.channelId;
+      if (!channelId) return { content: [{ type: 'text', text: 'No channel specified and not connected to one.' }], isError: true };
+      if (!args.user_id && !args.email) return { content: [{ type: 'text', text: 'Provide user_id or email.' }], isError: true };
+      const result = await apiCall('add_channel_member', {
+        channel_id: channelId,
+        user_id: args.user_id || undefined,
+        email: args.email || undefined,
+      }, sessionState.token);
+      if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      return { content: [{ type: 'text', text: result.message }] };
+    }
+
+    case 'mcp_chat_modify_channel': {
+      if (!sessionState.token) {
+        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_connect first.' }], isError: true };
+      }
+      const channelId = args.channel_id || sessionState.channelId;
+      if (!channelId) return { content: [{ type: 'text', text: 'No channel specified and not connected to one.' }], isError: true };
+      const result = await apiCall('modify_channel', {
+        channel_id: channelId,
+        name: args.name || undefined,
+        description: args.description !== undefined ? args.description : undefined,
+      }, sessionState.token);
+      if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      return { content: [{ type: 'text', text: `Channel updated: #${result.channel.name}${result.channel.description ? ` -- ${result.channel.description}` : ''}` }] };
     }
 
     default:

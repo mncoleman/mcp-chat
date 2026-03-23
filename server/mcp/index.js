@@ -203,6 +203,121 @@ function setupMcpRoutes(app) {
           return res.json({ sessions: result.rows });
         }
 
+        case 'create_channel': {
+          const { name, description, member_ids } = args;
+          if (!name || typeof name !== 'string' || !name.trim()) {
+            return res.json({ error: 'name is required' });
+          }
+
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+
+            const channelResult = await client.query(
+              'INSERT INTO channels (name, description, created_by) VALUES ($1, $2, $3) RETURNING *',
+              [name.trim(), description || null, user.id]
+            );
+            const channel = channelResult.rows[0];
+
+            // Add creator as admin member
+            await client.query(
+              'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3)',
+              [channel.id, user.id, 'admin']
+            );
+
+            // Add additional members
+            if (member_ids && Array.isArray(member_ids)) {
+              for (const memberId of member_ids) {
+                if (memberId !== user.id) {
+                  await client.query(
+                    'INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                    [channel.id, memberId]
+                  );
+                }
+              }
+            }
+
+            await client.query('COMMIT');
+            return res.json({ success: true, channel: { id: channel.id, name: channel.name, description: channel.description } });
+          } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+          } finally {
+            client.release();
+          }
+        }
+
+        case 'add_channel_member': {
+          const { channel_id, user_id: targetUserId, email } = args;
+          if (!channel_id) return res.json({ error: 'channel_id is required' });
+          if (!targetUserId && !email) return res.json({ error: 'user_id or email is required' });
+
+          // Verify caller is admin of the channel
+          const adminCheck = await pool.query(
+            "SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2 AND role = 'admin'",
+            [channel_id, user.id]
+          );
+          if (adminCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'You must be a channel admin to add members' });
+          }
+
+          // Resolve user by email if needed
+          let resolvedUserId = targetUserId;
+          if (!resolvedUserId && email) {
+            const userResult = await pool.query('SELECT id, name FROM users WHERE email = $1', [email]);
+            if (userResult.rows.length === 0) {
+              return res.json({ error: `No user found with email: ${email}` });
+            }
+            resolvedUserId = userResult.rows[0].id;
+          }
+
+          await pool.query(
+            'INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [channel_id, resolvedUserId]
+          );
+
+          const addedUser = await pool.query('SELECT name, email FROM users WHERE id = $1', [resolvedUserId]);
+          const userName = addedUser.rows[0]?.name || 'Unknown';
+          return res.json({ success: true, message: `${userName} added to channel` });
+        }
+
+        case 'modify_channel': {
+          const { channel_id, name, description } = args;
+          if (!channel_id) return res.json({ error: 'channel_id is required' });
+          if (!name && description === undefined) return res.json({ error: 'Provide name and/or description to update' });
+
+          // Verify caller is admin of the channel
+          const modAdminCheck = await pool.query(
+            "SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2 AND role = 'admin'",
+            [channel_id, user.id]
+          );
+          if (modAdminCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'You must be a channel admin to modify it' });
+          }
+
+          const updates = [];
+          const values = [];
+          let paramIndex = 1;
+
+          if (name) {
+            updates.push(`name = $${paramIndex++}`);
+            values.push(name.trim());
+          }
+          if (description !== undefined) {
+            updates.push(`description = $${paramIndex++}`);
+            values.push(description || null);
+          }
+          updates.push(`updated_at = NOW()`);
+          values.push(channel_id);
+
+          const result = await pool.query(
+            `UPDATE channels SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, description`,
+            values
+          );
+          if (result.rows.length === 0) return res.json({ error: 'Channel not found' });
+          return res.json({ success: true, channel: result.rows[0] });
+        }
+
         default:
           return res.json({ error: `Unknown tool: ${tool}` });
       }
@@ -258,6 +373,45 @@ function setupMcpRoutes(app) {
             type: 'object',
             properties: {
               channel_id: { type: 'number', description: 'Channel ID' },
+            },
+            required: ['channel_id'],
+          },
+        },
+        {
+          name: 'create_channel',
+          description: 'Create a new channel. You become the admin. Optionally add members by user ID.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Channel name' },
+              description: { type: 'string', description: 'Channel description' },
+              member_ids: { type: 'array', items: { type: 'number' }, description: 'User IDs to add as members' },
+            },
+            required: ['name'],
+          },
+        },
+        {
+          name: 'add_channel_member',
+          description: 'Add a user to a channel (requires channel admin). Specify user by ID or email.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              channel_id: { type: 'number', description: 'Channel ID' },
+              user_id: { type: 'number', description: 'User ID to add' },
+              email: { type: 'string', description: 'Email of user to add (alternative to user_id)' },
+            },
+            required: ['channel_id'],
+          },
+        },
+        {
+          name: 'modify_channel',
+          description: 'Update a channel name and/or description (requires channel admin).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              channel_id: { type: 'number', description: 'Channel ID' },
+              name: { type: 'string', description: 'New channel name' },
+              description: { type: 'string', description: 'New channel description' },
             },
             required: ['channel_id'],
           },
