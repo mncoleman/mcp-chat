@@ -11,7 +11,13 @@ const WebSocket = require('ws');
 const CONFIG_DIR = path.join(require('os').homedir(), '.mcp-chat');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
-const MCP_CHAT_URL = process.env.MCP_CHAT_URL || 'https://mcpchat.dovito.com';
+const MCP_CHAT_URL = process.env.MCP_CHAT_URL;
+if (!MCP_CHAT_URL) {
+  process.stderr.write('FATAL: MCP_CHAT_URL environment variable is required.\n');
+  process.stderr.write('Set it when adding the MCP server, e.g.:\n');
+  process.stderr.write('  claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat $(which mcp-chat-connect)\n');
+  process.exit(1);
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -79,6 +85,8 @@ let wsReconnectTimeout = null;
 function connectWebSocket() {
   if (!sessionState.connected || !sessionState.token || !sessionState.channelId) return;
 
+  // Note: JWT is passed as a query parameter because WebSocket does not support custom headers.
+  // Be aware this token may appear in server/proxy access logs.
   const wsUrl = `${MCP_CHAT_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?token=${sessionState.token}&channel=${sessionState.channelId}&session=${sessionState.sessionToken}`;
 
   if (wsConnection) {

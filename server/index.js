@@ -57,10 +57,6 @@ if (fs.existsSync(clientDist)) {
 // Auth (public)
 app.use('/api/auth', require('./routes/auth'));
 
-// Invite validation is public
-const invitesRouter = require('./routes/invites');
-app.get('/api/invites/validate/:code', invitesRouter);
-
 // MCP endpoints (auth handled internally)
 setupMcpRoutes(app);
 

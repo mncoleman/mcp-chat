@@ -90,6 +90,14 @@ claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat $(which 
 alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
 ```
 
+## npm Publishing
+
+The `mcp-chat-connect` package requires 2FA for npm publish. Claude cannot publish directly. After bumping the version, provide the user with the terminal commands to publish:
+
+```bash
+cd mcp-server && npm publish
+```
+
 ## Rules
 
 - No emojis in code, comments, or UI text
