@@ -16,11 +16,14 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 15m
           script: |
             cd /home/ec2-user/mcp-chat
+            # Clean up dangling images/containers from any failed builds
+            sudo docker system prune -f
             git pull origin main
             source .env
-            # Always regenerate nginx.conf from template with correct domain
+            # Regenerate nginx.conf from template with correct domain
             DOMAIN=$(echo $APP_URL | sed 's|https://||')
             sed "s/your-domain.com/$DOMAIN/g" nginx.conf.example > nginx.conf
             sudo docker build \
