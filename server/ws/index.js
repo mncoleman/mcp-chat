@@ -12,6 +12,8 @@ function setupWebSocket(server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', async (ws, req) => {
+    // JWT is passed via query string (WebSocket does not support custom headers).
+    // Ensure server/proxy logs do not capture full query strings in production.
     const url = new URL(req.url, 'http://localhost');
     const token = url.searchParams.get('token');
     const channelId = url.searchParams.get('channel');

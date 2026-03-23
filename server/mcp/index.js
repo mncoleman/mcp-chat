@@ -123,6 +123,15 @@ function setupMcpRoutes(app) {
             return res.json({ error: 'channel_id and content are required' });
           }
 
+          // Verify channel membership
+          const sendMemberCheck = await pool.query(
+            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+            [channel_id, user.id]
+          );
+          if (sendMemberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member of this channel' });
+          }
+
           const result = await pool.query(
             `INSERT INTO messages (channel_id, user_id, session_id, content, message_type)
              VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -153,6 +162,16 @@ function setupMcpRoutes(app) {
 
         case 'get_messages': {
           const { channel_id, limit = 20 } = args;
+
+          // Verify channel membership
+          const msgMemberCheck = await pool.query(
+            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+            [channel_id, user.id]
+          );
+          if (msgMemberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member of this channel' });
+          }
+
           const result = await pool.query(
             `SELECT m.id, m.content, m.message_type, m.session_id, m.created_at, u.name as user_name
              FROM messages m JOIN users u ON u.id = m.user_id
@@ -165,6 +184,16 @@ function setupMcpRoutes(app) {
 
         case 'get_presence': {
           const { channel_id } = args;
+
+          // Verify channel membership
+          const presMemberCheck = await pool.query(
+            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+            [channel_id, user.id]
+          );
+          if (presMemberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member of this channel' });
+          }
+
           const result = await pool.query(
             `SELECT s.session_token, s.label, s.is_connected, u.name as user_name, u.id as user_id
              FROM sessions s JOIN users u ON u.id = s.user_id

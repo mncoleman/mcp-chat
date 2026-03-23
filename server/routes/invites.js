@@ -58,19 +58,4 @@ router.get('/', requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * GET /api/invites/check/:email - Check if an email has a valid invite (public)
- */
-router.get('/check/:email', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT id FROM invites WHERE email = $1 AND used_by IS NULL AND (expires_at IS NULL OR expires_at > NOW())',
-      [req.params.email]
-    );
-    res.json({ invited: result.rows.length > 0 });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 module.exports = router;
