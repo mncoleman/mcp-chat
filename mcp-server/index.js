@@ -261,6 +261,44 @@ if (savedConfig.token) {
   sessionState.userId = savedConfig.userId;
 }
 
+// Auto-connect from env vars (headless/bot mode)
+const envToken = process.env.MCP_CHAT_TOKEN;
+const envChannel = process.env.MCP_CHAT_CHANNEL;
+if (envToken && envChannel) {
+  let userId = null;
+  let userName = process.env.MCP_CHAT_USER_NAME || 'Bot';
+  try {
+    const payload = JSON.parse(Buffer.from(envToken.split('.')[1], 'base64').toString());
+    userId = payload.id;
+    userName = process.env.MCP_CHAT_USER_NAME || payload.name || 'Bot';
+  } catch {}
+
+  const sessionToken = `mcp-${crypto.randomBytes(16).toString('hex')}`;
+  sessionState = {
+    token: envToken,
+    channelId: parseInt(envChannel, 10),
+    channelName: process.env.MCP_CHAT_CHANNEL_NAME || `channel-${envChannel}`,
+    userName,
+    userId,
+    sessionToken,
+    sessionLabel: null,
+    connected: true,
+  };
+
+  // Register session for sequential label, then connect WebSocket
+  apiCall('register_session', {
+    channel_id: sessionState.channelId,
+    session_token: sessionToken,
+  }, envToken).then(result => {
+    sessionState.sessionLabel = result.label || 'Session';
+    process.stderr.write(`[mcp-chat] Auto-connected to #${sessionState.channelName} as ${userName} (${sessionState.sessionLabel})\n`);
+  }).catch(() => {
+    process.stderr.write(`[mcp-chat] Auto-connected to #${sessionState.channelName} as ${userName}\n`);
+  }).finally(() => {
+    connectWebSocket();
+  });
+}
+
 function sendResponse(id, result) {
   const msg = JSON.stringify({ jsonrpc: '2.0', id, result });
   process.stdout.write(`${msg}\n`);
