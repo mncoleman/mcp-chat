@@ -5,7 +5,7 @@ import api from '@/lib/axios.js'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { Mail, Plus, Copy, Check } from 'lucide-react'
+import { Mail, Plus, Copy, Check, Key, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false)
@@ -38,9 +38,102 @@ function CopyButton({ text }) {
   )
 }
 
+function ServiceKeys({ userId }) {
+  const queryClient = useQueryClient()
+  const [newKeyLabel, setNewKeyLabel] = useState('')
+  const [generatedKey, setGeneratedKey] = useState(null)
+
+  const { data: keys = [], isLoading } = useQuery({
+    queryKey: ['service-keys', userId],
+    queryFn: () => api.get(`/api/users/${userId}/service-keys`).then(r => r.data),
+  })
+
+  const createMutation = useMutation({
+    mutationFn: (label) => api.post(`/api/users/${userId}/service-key`, { label }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['service-keys', userId] })
+      setGeneratedKey(res.data.api_key)
+      setNewKeyLabel('')
+      toast.success('API key created')
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to create key'),
+  })
+
+  const revokeMutation = useMutation({
+    mutationFn: (keyId) => api.delete(`/api/users/${userId}/service-keys/${keyId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['service-keys', userId] })
+      toast.success('Key revoked')
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to revoke key'),
+  })
+
+  return (
+    <div className="pl-13 pr-4 pb-4 space-y-3">
+      {generatedKey && (
+        <div className="border border-yellow-500/30 bg-yellow-500/5 rounded-lg p-3 space-y-2">
+          <p className="text-sm font-medium text-yellow-600">New API Key (copy now -- shown only once)</p>
+          <div className="flex items-center gap-2">
+            <code className="text-xs bg-muted px-2 py-1 rounded flex-1 break-all">{generatedKey}</code>
+            <CopyButton text={generatedKey} />
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => setGeneratedKey(null)}>Dismiss</Button>
+        </div>
+      )}
+
+      <form onSubmit={(e) => { e.preventDefault(); if (newKeyLabel.trim()) createMutation.mutate(newKeyLabel.trim()) }} className="flex gap-2">
+        <input
+          type="text"
+          value={newKeyLabel}
+          onChange={(e) => setNewKeyLabel(e.target.value)}
+          placeholder="Key label (e.g. Jarvis homeserver)"
+          className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+        />
+        <Button type="submit" size="sm" disabled={!newKeyLabel.trim() || createMutation.isPending}>
+          <Key className="mr-1 h-3 w-3" /> Create Key
+        </Button>
+      </form>
+
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading keys...</p>
+      ) : keys.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No service keys</p>
+      ) : (
+        <div className="border rounded-lg divide-y">
+          {keys.map((k) => (
+            <div key={k.id} className="flex items-center justify-between p-2 px-3 text-sm">
+              <div className="flex items-center gap-3">
+                <Key className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="font-medium">{k.label}</span>
+                <code className="text-xs text-muted-foreground">{k.key_prefix}...</code>
+                <Badge variant={k.is_active ? 'success' : 'destructive'}>
+                  {k.is_active ? 'Active' : 'Revoked'}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                {k.last_used_at && (
+                  <span className="text-xs text-muted-foreground">
+                    Used {new Date(k.last_used_at).toLocaleDateString()}
+                  </span>
+                )}
+                {k.is_active && (
+                  <Button variant="ghost" size="sm" className="h-7 text-destructive" onClick={() => revokeMutation.mutate(k.id)}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function UsersPage() {
   const queryClient = useQueryClient()
   const [inviteEmail, setInviteEmail] = useState('')
+  const [expandedUser, setExpandedUser] = useState(null)
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ['users'],
@@ -154,39 +247,48 @@ export default function UsersPage() {
         <h2 className="text-lg font-semibold">Current Members</h2>
         <div className="border rounded-lg divide-y">
           {users.map((u) => (
-            <div key={u.id} className="flex items-center justify-between p-4">
-              <div className="flex items-center gap-3">
-                <Avatar className="h-10 w-10">
-                  <AvatarImage src={u.avatar_url} />
-                  <AvatarFallback>{u.name?.[0]?.toUpperCase()}</AvatarFallback>
-                </Avatar>
-                <div>
-                  <p className="font-medium">{u.name}</p>
-                  <p className="text-sm text-muted-foreground">{u.email}</p>
+            <div key={u.id}>
+              <div className="flex items-center justify-between p-4">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setExpandedUser(expandedUser === u.id ? null : u.id)}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {expandedUser === u.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  </button>
+                  <Avatar className="h-10 w-10">
+                    <AvatarImage src={u.avatar_url} />
+                    <AvatarFallback>{u.name?.[0]?.toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="font-medium">{u.name}</p>
+                    <p className="text-sm text-muted-foreground">{u.email}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={u.role === 'admin' ? 'default' : 'secondary'}>
+                    {u.role}
+                  </Badge>
+                  <Badge variant={u.is_active ? 'success' : 'destructive'}>
+                    {u.is_active ? 'Active' : 'Inactive'}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => roleMutation.mutate({ id: u.id, role: u.role === 'admin' ? 'user' : 'admin' })}
+                  >
+                    {u.role === 'admin' ? 'Demote' : 'Promote'}
+                  </Button>
+                  <Button
+                    variant={u.is_active ? 'destructive' : 'outline'}
+                    size="sm"
+                    onClick={() => activeMutation.mutate({ id: u.id, is_active: !u.is_active })}
+                  >
+                    {u.is_active ? 'Deactivate' : 'Activate'}
+                  </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <Badge variant={u.role === 'admin' ? 'default' : 'secondary'}>
-                  {u.role}
-                </Badge>
-                <Badge variant={u.is_active ? 'success' : 'destructive'}>
-                  {u.is_active ? 'Active' : 'Inactive'}
-                </Badge>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => roleMutation.mutate({ id: u.id, role: u.role === 'admin' ? 'user' : 'admin' })}
-                >
-                  {u.role === 'admin' ? 'Demote' : 'Promote'}
-                </Button>
-                <Button
-                  variant={u.is_active ? 'destructive' : 'outline'}
-                  size="sm"
-                  onClick={() => activeMutation.mutate({ id: u.id, is_active: !u.is_active })}
-                >
-                  {u.is_active ? 'Deactivate' : 'Activate'}
-                </Button>
-              </div>
+              {expandedUser === u.id && <ServiceKeys userId={u.id} />}
             </div>
           ))}
           {users.length === 0 && (
