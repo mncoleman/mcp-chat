@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../db/pool');
 const { JWT_SECRET } = require('../middleware/auth');
@@ -96,6 +97,53 @@ router.post('/google', async (req, res) => {
   } catch (err) {
     console.error('Google auth error:', err);
     res.status(401).json({ error: 'Invalid Google credential' });
+  }
+});
+
+/**
+ * POST /api/auth/service - Authenticate with API key (for bots/service accounts)
+ * Body: { api_key: "mcp_..." }
+ * Returns: { token: "JWT...", user: { id, email, name, role } }
+ */
+router.post('/service', async (req, res) => {
+  try {
+    const { api_key } = req.body;
+    if (!api_key || typeof api_key !== 'string') {
+      return res.status(400).json({ error: 'Missing api_key' });
+    }
+
+    const keyHash = crypto.createHash('sha256').update(api_key).digest('hex');
+
+    const result = await pool.query(
+      `SELECT sa.id as sa_id, sa.user_id, sa.label, u.*
+       FROM service_accounts sa
+       JOIN users u ON u.id = sa.user_id
+       WHERE sa.key_hash = $1 AND sa.is_active = true AND u.is_active = true`,
+      [keyHash]
+    );
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
+
+    const user = result.rows[0];
+
+    // Update last_used_at
+    await pool.query('UPDATE service_accounts SET last_used_at = NOW() WHERE id = $1', [user.sa_id]);
+    await pool.query('UPDATE users SET last_seen_at = NOW() WHERE id = $1', [user.user_id]);
+
+    const token = jwt.sign(
+      { id: user.user_id, email: user.email, name: user.name, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      token,
+      user: { id: user.user_id, email: user.email, name: user.name, role: user.role },
+    });
+  } catch (err) {
+    console.error('[auth/service]', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

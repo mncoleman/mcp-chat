@@ -8,6 +8,21 @@ const http = require('http');
 const { requireAuth } = require('./middleware/auth');
 const { setupWebSocket, broadcastToChannel } = require('./ws/index');
 const { setupMcpRoutes } = require('./mcp/index');
+const pool = require('./db/pool');
+
+// Run migrations for new tables
+pool.query(`
+  CREATE TABLE IF NOT EXISTS service_accounts (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_hash TEXT NOT NULL,
+    key_prefix TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT 'Service Account',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`).catch(err => console.error('Migration error:', err.message));
 
 const app = express();
 const server = http.createServer(app);
