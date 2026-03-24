@@ -12,6 +12,7 @@ function setupWebSocket(server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', async (ws, req) => {
+   try {
     // JWT is passed via query string (WebSocket does not support custom headers).
     // Ensure server/proxy logs do not capture full query strings in production.
     const url = new URL(req.url, 'http://localhost');
@@ -25,6 +26,13 @@ function setupWebSocket(server) {
       user = jwt.verify(token, JWT_SECRET);
     } catch {
       ws.close(4001, 'Invalid token');
+      return;
+    }
+
+    // Verify channel exists
+    const channelCheck = await pool.query('SELECT 1 FROM channels WHERE id = $1', [channelId]);
+    if (channelCheck.rows.length === 0) {
+      ws.close(4003, 'Channel not found');
       return;
     }
 
@@ -159,6 +167,10 @@ function setupWebSocket(server) {
       user: { id: user.id, name: user.name },
       online: Object.values(onlineUsers),
     }));
+   } catch (err) {
+    console.error('[ws] connection error:', err);
+    try { ws.close(4000, 'Server error'); } catch {}
+   }
   });
 
   return wss;
