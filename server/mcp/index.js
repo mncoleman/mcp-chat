@@ -208,6 +208,40 @@ function setupMcpRoutes(app) {
           return res.json({ sessions: result.rows });
         }
 
+        case 'register_session': {
+          const { channel_id, session_token } = args;
+          if (!channel_id || !session_token) {
+            return res.json({ error: 'channel_id and session_token are required' });
+          }
+
+          // Verify channel membership
+          const regMemberCheck = await pool.query(
+            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+            [channel_id, user.id]
+          );
+          if (regMemberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member of this channel' });
+          }
+
+          // Count existing connected sessions for this user in this channel to assign next number
+          const activeResult = await pool.query(
+            'SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND channel_id = $2 AND is_connected = true',
+            [user.id, channel_id]
+          );
+          const sessionNumber = parseInt(activeResult.rows[0].count) + 1;
+          const label = `Session ${sessionNumber}`;
+
+          // Upsert the session record
+          await pool.query(
+            `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
+             VALUES ($1, $2, $3, $4, true, NOW())
+             ON CONFLICT (session_token) DO UPDATE SET is_connected = true, connected_at = NOW(), label = $4`,
+            [session_token, user.id, channel_id, label]
+          );
+
+          return res.json({ label, session_number: sessionNumber, session_token });
+        }
+
         case 'create_channel': {
           const { name, description, member_ids } = args;
           if (!name || typeof name !== 'string' || !name.trim()) {
