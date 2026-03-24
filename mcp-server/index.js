@@ -249,6 +249,7 @@ let sessionState = {
   userName: null,
   userId: null,
   sessionToken: null,
+  sessionLabel: null,
   connected: false,
 };
 
@@ -391,16 +392,28 @@ async function handleToolCall(name, args) {
           userName: result.userName,
           userId,
           sessionToken,
+          sessionLabel: null,
           connected: true,
         };
         saveConfig({ token: result.token, userName: result.userName, userId });
+
+        // Register session to get sequential label
+        let sessionLabel = 'Session';
+        try {
+          const regResult = await apiCall('register_session', {
+            channel_id: result.channelId,
+            session_token: sessionToken,
+          }, result.token);
+          sessionLabel = regResult.label || 'Session';
+          sessionState.sessionLabel = sessionLabel;
+        } catch {}
 
         // Start WebSocket listener for real-time push
         connectWebSocket();
 
         // Check for package updates
         const updateNotice = await checkForUpdate();
-        let responseText = `Connected to #${result.channelName} as ${result.userName}. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
+        let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
         if (updateNotice) {
           responseText += `\n\n${updateNotice}`;
         }
@@ -435,11 +448,23 @@ async function handleToolCall(name, args) {
           channelId,
           channelName: channel.name,
           sessionToken,
+          sessionLabel: null,
           connected: true,
         };
 
+        // Register session to get sequential label
+        let sessionLabel = 'Session';
+        try {
+          const regResult = await apiCall('register_session', {
+            channel_id: channelId,
+            session_token: sessionToken,
+          }, sessionState.token);
+          sessionLabel = regResult.label || 'Session';
+          sessionState.sessionLabel = sessionLabel;
+        } catch {}
+
         connectWebSocket();
-        return { content: [{ type: 'text', text: `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName}. Live messages are now being pushed.` }] };
+        return { content: [{ type: 'text', text: `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Live messages are now being pushed.` }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Failed to join channel: ${err.message}` }], isError: true };
       }
@@ -511,10 +536,10 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_status': {
       if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_connect to pick a channel.' : 'Not connected. Run mcp_chat_connect to authenticate and select a channel.' }] };
+        return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_connect or mcp_chat_join to pick a channel.' : 'Not connected. Run mcp_chat_connect to authenticate and select a channel.' }] };
       }
       const wsStatus = wsConnection?.readyState === 1 ? 'live (receiving messages)' : 'reconnecting...';
-      return { content: [{ type: 'text', text: `Connected to #${sessionState.channelName} as ${sessionState.userName}\nWebSocket: ${wsStatus}` }] };
+      return { content: [{ type: 'text', text: `Connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'})\nWebSocket: ${wsStatus}` }] };
     }
 
     case 'mcp_chat_create_channel': {
