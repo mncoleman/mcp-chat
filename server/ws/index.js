@@ -28,14 +28,21 @@ function setupWebSocket(server) {
       return;
     }
 
-    // Verify channel membership
+    // Verify channel membership (admins auto-join if not already a member)
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [channelId, user.id]
     );
     if (memberCheck.rows.length === 0) {
-      ws.close(4003, 'Not a member of this channel');
-      return;
+      if (user.role === 'admin') {
+        await pool.query(
+          'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [channelId, user.id, 'admin']
+        );
+      } else {
+        ws.close(4003, 'Not a member of this channel');
+        return;
+      }
     }
 
     // If session token provided, verify ownership and upsert session as connected

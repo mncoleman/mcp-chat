@@ -32,13 +32,20 @@ function setupMcpRoutes(app) {
 
     const channelId = channel;
 
-    // Verify membership
+    // Verify membership (admins auto-join if not already a member)
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [channelId, user.id]
     );
     if (memberCheck.rows.length === 0) {
-      return res.status(403).json({ error: 'Not a member of this channel' });
+      if (user.role === 'admin') {
+        await pool.query(
+          'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [channelId, user.id, 'admin']
+        );
+      } else {
+        return res.status(403).json({ error: 'Not a member of this channel' });
+      }
     }
 
     // Create session record
@@ -214,13 +221,20 @@ function setupMcpRoutes(app) {
             return res.json({ error: 'channel_id and session_token are required' });
           }
 
-          // Verify channel membership
+          // Verify channel membership (admins auto-join)
           const regMemberCheck = await pool.query(
             'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
             [channel_id, user.id]
           );
           if (regMemberCheck.rows.length === 0) {
-            return res.status(403).json({ error: 'Not a member of this channel' });
+            if (user.role === 'admin') {
+              await pool.query(
+                'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+                [channel_id, user.id, 'admin']
+              );
+            } else {
+              return res.status(403).json({ error: 'Not a member of this channel' });
+            }
           }
 
           // Count existing connected sessions for this user in this channel to assign next number
