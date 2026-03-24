@@ -161,6 +161,7 @@ The MCP server declares `experimental: { 'claude/channel': {} }` capability and 
 | Tool | Description |
 |------|-------------|
 | `mcp_chat_connect` | Opens browser to authenticate and select a channel |
+| `mcp_chat_join` | Join a channel by ID without browser (uses saved auth, for agents) |
 | `mcp_chat_send` | Send a message to the connected channel |
 | `mcp_chat_read` | Read recent message history |
 | `mcp_chat_presence` | See who is online and active sessions |
@@ -169,6 +170,10 @@ The MCP server declares `experimental: { 'claude/channel': {} }` capability and 
 | `mcp_chat_create_channel` | Create a new channel (you become admin) |
 | `mcp_chat_add_member` | Add a user to a channel by ID or email (channel admin) |
 | `mcp_chat_modify_channel` | Update channel name and/or description (channel admin) |
+
+### Multi-session support
+
+Multiple Claude Code sessions can connect to the same channel. Each session is assigned a sequential label (Session 1, Session 2, etc.) so they can be identified and addressed individually. This works across machines -- any session authenticated with your account can join.
 
 ## Environment variables
 

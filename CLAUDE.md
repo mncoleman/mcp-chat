@@ -39,6 +39,8 @@ The MCP server (`mcp-server/index.js`) integrates with Claude Code's channels re
 - Message content validated: max 10K chars, message_type whitelist
 - Invite codes use crypto.randomBytes (192-bit entropy)
 - Chat UI groups consecutive messages from same user within 2 minutes
+- Multi-session: `register_session` assigns sequential labels (Session 1, 2...) per user per channel
+- `mcp_chat_join` connects to a channel by ID without browser auth (uses saved token from prior `mcp_chat_connect`)
 
 ## Pages
 
@@ -87,7 +89,7 @@ Users update with: `npm install -g mcp-chat-connect`
 ```bash
 npm install -g mcp-chat-connect
 claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat $(which mcp-chat-connect)
-alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
+alias claudechat='claude --dangerously-load-development-channels server:mcp-chat'
 ```
 
 ## npm Publishing
