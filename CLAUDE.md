@@ -89,7 +89,7 @@ Users update with: `npm install -g mcp-chat-connect`
 ```bash
 npm install -g mcp-chat-connect
 claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat $(which mcp-chat-connect)
-alias claudechat='claude --dangerously-load-development-channels server:mcp-chat'
+alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
 ```
 
 ## npm Publishing
