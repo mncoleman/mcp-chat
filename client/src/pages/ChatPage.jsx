@@ -140,12 +140,13 @@ export default function ChatPage() {
                 const isFromClaude = !!msg.session_id
                 const isOwn = msg.user_id === user?.id
                 const displayName = isFromClaude
-                  ? `${msg.user_name?.split(' ')[0]}'s Claude`
+                  ? `${msg.user_name?.split(' ')[0]}'s Claude${msg.session_label ? ` (${msg.session_label})` : ''}`
                   : msg.user_name
                 const prev = allMessages[i - 1]
                 const prevIsFromClaude = !!prev?.session_id
                 const isGrouped = prev && prev.user_id === msg.user_id &&
                   prevIsFromClaude === isFromClaude &&
+                  prev.session_id === msg.session_id &&
                   (new Date(msg.created_at) - new Date(prev.created_at)) < 120000
                 const showHeader = !isGrouped
 

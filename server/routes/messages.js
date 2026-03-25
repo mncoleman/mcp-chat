@@ -18,9 +18,10 @@ router.get('/:channelId/messages', async (req, res) => {
     const parsedLimit = parseInt(limitRaw, 10);
     const params = [req.params.channelId, isNaN(parsedLimit) || parsedLimit < 1 ? 50 : Math.min(parsedLimit, 100)];
     let query = `
-      SELECT m.*, u.name as user_name, u.avatar_url as user_avatar
+      SELECT m.*, u.name as user_name, u.avatar_url as user_avatar, s.label as session_label
       FROM messages m
       JOIN users u ON u.id = m.user_id
+      LEFT JOIN sessions s ON s.session_token = m.session_id
       WHERE m.channel_id = $1
     `;
     if (before) {
