@@ -362,6 +362,7 @@ function getTools() {
         type: 'object',
         properties: {
           channel_id: { type: 'number', description: 'Channel ID to join' },
+          label: { type: 'string', description: 'Custom session label (e.g. "QA Agent", "Security Checker"). Defaults to sequential "Session N".' },
         },
         required: ['channel_id'],
       },
@@ -490,14 +491,15 @@ async function handleToolCall(name, args) {
           connected: true,
         };
 
-        // Register session to get sequential label
-        let sessionLabel = 'Session';
+        // Register session to get label (custom or sequential)
+        let sessionLabel = args.label || 'Session';
         try {
           const regResult = await apiCall('register_session', {
             channel_id: channelId,
             session_token: sessionToken,
+            label: args.label || undefined,
           }, sessionState.token);
-          sessionLabel = regResult.label || 'Session';
+          sessionLabel = regResult.label || sessionLabel;
           sessionState.sessionLabel = sessionLabel;
         } catch {}
 

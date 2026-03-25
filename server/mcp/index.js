@@ -237,13 +237,16 @@ function setupMcpRoutes(app) {
             }
           }
 
-          // Count existing connected sessions for this user in this channel to assign next number
-          const activeResult = await pool.query(
-            'SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND channel_id = $2 AND is_connected = true',
-            [user.id, channel_id]
-          );
-          const sessionNumber = parseInt(activeResult.rows[0].count) + 1;
-          const label = `Session ${sessionNumber}`;
+          // Use custom label if provided, otherwise assign sequential number
+          let label = args.label;
+          if (!label) {
+            const activeResult = await pool.query(
+              'SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND channel_id = $2 AND is_connected = true',
+              [user.id, channel_id]
+            );
+            const sessionNumber = parseInt(activeResult.rows[0].count) + 1;
+            label = `Session ${sessionNumber}`;
+          }
 
           // Upsert the session record
           await pool.query(
