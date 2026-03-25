@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -59,6 +59,27 @@ export default function ChatPage() {
 
   // Combine history + live messages
   const allMessages = [...history, ...wsMessages]
+
+  // Assign stable colors to different Claude sessions
+  const SESSION_COLORS = [
+    { bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-900', name: 'text-orange-700', icon: 'bg-orange-100', iconText: 'text-orange-700' },
+    { bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-900', name: 'text-violet-700', icon: 'bg-violet-100', iconText: 'text-violet-700' },
+    { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-900', name: 'text-emerald-700', icon: 'bg-emerald-100', iconText: 'text-emerald-700' },
+    { bg: 'bg-sky-50', border: 'border-sky-200', text: 'text-sky-900', name: 'text-sky-700', icon: 'bg-sky-100', iconText: 'text-sky-700' },
+    { bg: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-900', name: 'text-rose-700', icon: 'bg-rose-100', iconText: 'text-rose-700' },
+    { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-900', name: 'text-amber-700', icon: 'bg-amber-100', iconText: 'text-amber-700' },
+  ]
+  const sessionColorMap = useMemo(() => {
+    const map = {}
+    let idx = 0
+    allMessages.forEach(m => {
+      if (m.session_id && !map[m.session_id]) {
+        map[m.session_id] = SESSION_COLORS[idx % SESSION_COLORS.length]
+        idx++
+      }
+    })
+    return map
+  }, [allMessages])
 
   // Auto-scroll
   useEffect(() => {
@@ -139,6 +160,7 @@ export default function ChatPage() {
               {allMessages.map((msg, i) => {
                 const isFromClaude = !!msg.session_id
                 const isOwn = msg.user_id === user?.id
+                const sColor = isFromClaude ? (sessionColorMap[msg.session_id] || SESSION_COLORS[0]) : null
                 const displayName = isFromClaude
                   ? `${msg.user_name?.split(' ')[0]}'s Claude${msg.session_label ? ` (${msg.session_label})` : ''}`
                   : msg.user_name
@@ -158,8 +180,8 @@ export default function ChatPage() {
                   )}>
                     {showHeader ? (
                       isFromClaude ? (
-                        <div className="h-7 w-7 shrink-0 mt-0.5 rounded-full bg-orange-100 flex items-center justify-center">
-                          <Terminal className="h-3.5 w-3.5 text-orange-700" />
+                        <div className={cn('h-7 w-7 shrink-0 mt-0.5 rounded-full flex items-center justify-center', sColor.icon)}>
+                          <Terminal className={cn('h-3.5 w-3.5', sColor.iconText)} />
                         </div>
                       ) : (
                         <Avatar className="h-7 w-7 shrink-0 mt-0.5">
@@ -173,7 +195,7 @@ export default function ChatPage() {
                     <div className={cn('max-w-[70%] min-w-0', isOwn && !isFromClaude && 'text-right')}>
                       {showHeader && (
                         <div className={cn('flex items-center gap-1.5 mb-0.5', isOwn && !isFromClaude && 'flex-row-reverse')}>
-                          <span className={cn('text-xs font-medium', isFromClaude && 'text-orange-700')}>
+                          <span className={cn('text-xs font-medium', isFromClaude && sColor.name)}>
                             {displayName}
                           </span>
                           <span className="text-[10px] text-muted-foreground">
@@ -184,7 +206,7 @@ export default function ChatPage() {
                       <div className={cn(
                         'inline-block rounded-2xl px-3 py-1 text-sm leading-snug',
                         isFromClaude
-                          ? 'bg-orange-50 border border-orange-200 text-orange-900'
+                          ? `${sColor.bg} border ${sColor.border} ${sColor.text}`
                           : isOwn
                             ? 'bg-primary text-primary-foreground'
                             : messageTypeStyles[msg.message_type] || 'bg-muted',
