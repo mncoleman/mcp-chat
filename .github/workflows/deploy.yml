@@ -10,25 +10,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to EC2
+      - name: Setup Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Deploy to Homeserver
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           command_timeout: 15m
           script: |
-            cd /home/ec2-user/mcp-chat
-            # Clean up dangling images/containers from any failed builds
-            sudo docker system prune -f
+            cd /opt/mcp-chat
+            docker system prune -f
             git pull origin main
             source .env
-            # Regenerate nginx.conf from template with correct domain
-            DOMAIN=$(echo $APP_URL | sed 's|https://||')
-            sed "s/your-domain.com/$DOMAIN/g" nginx.conf.example > nginx.conf
-            sudo docker build \
+            docker compose build \
               --build-arg VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
               --build-arg VITE_API_URL=$APP_URL \
-              -t mcp-chat-app .
-            sudo /usr/local/bin/docker-compose up -d app nginx
-            sudo docker image prune -f
+              app
+            docker compose up -d app db
+            docker image prune -f
