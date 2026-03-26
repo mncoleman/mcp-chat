@@ -67,12 +67,22 @@ async function apiCall(tool, args, token) {
 
 // ─── Version check ──────────────────────────────────────────────────────────
 
+function isNewerVersion(latest, current) {
+  const l = latest.split('.').map(Number);
+  const c = current.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((l[i] || 0) > (c[i] || 0)) return true;
+    if ((l[i] || 0) < (c[i] || 0)) return false;
+  }
+  return false;
+}
+
 async function checkForUpdate() {
   try {
     const response = await fetch(`${MCP_CHAT_URL}/api/version`);
     if (!response.ok) return null;
     const { latest } = await response.json();
-    if (latest && latest !== LOCAL_VERSION) {
+    if (latest && isNewerVersion(latest, LOCAL_VERSION)) {
       return `UPDATE AVAILABLE: You are running mcp-chat-connect v${LOCAL_VERSION}, but v${latest} is available. Run: npm install -g mcp-chat-connect`;
     }
   } catch {}
