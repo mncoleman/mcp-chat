@@ -71,6 +71,8 @@ export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
   }, [channelId])
 
   useEffect(() => {
+    setMessages([])
+    setPresence({})
     connect()
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current)
