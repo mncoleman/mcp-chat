@@ -11,6 +11,32 @@ import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Send, Hash, Wifi, WifiOff, Monitor, Terminal } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
+const markdownComponents = {
+  p: ({ node, ...props }) => <p className="my-0.5 first:mt-0 last:mb-0 whitespace-pre-wrap" {...props} />,
+  a: ({ node, ...props }) => <a className="underline underline-offset-2 hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+  ul: ({ node, ...props }) => <ul className="list-disc ml-5 my-1" {...props} />,
+  ol: ({ node, ...props }) => <ol className="list-decimal ml-5 my-1" {...props} />,
+  li: ({ node, ...props }) => <li className="my-0" {...props} />,
+  h1: ({ node, ...props }) => <h1 className="text-base font-semibold mt-2 mb-1 first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => <h2 className="text-sm font-semibold mt-2 mb-1 first:mt-0" {...props} />,
+  h3: ({ node, ...props }) => <h3 className="text-sm font-semibold mt-1.5 mb-0.5 first:mt-0" {...props} />,
+  h4: ({ node, ...props }) => <h4 className="text-sm font-semibold mt-1 mb-0.5 first:mt-0" {...props} />,
+  blockquote: ({ node, ...props }) => <blockquote className="border-l-2 border-current/30 pl-2 my-1 opacity-80" {...props} />,
+  code: ({ node, inline, className, children, ...props }) =>
+    inline ? (
+      <code className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-[0.85em] font-mono" {...props}>{children}</code>
+    ) : (
+      <code className="block px-2 py-1.5 rounded bg-black/10 dark:bg-white/10 text-[0.85em] font-mono overflow-x-auto whitespace-pre" {...props}>{children}</code>
+    ),
+  pre: ({ node, ...props }) => <pre className="my-1 overflow-x-auto" {...props} />,
+  hr: ({ node, ...props }) => <hr className="my-2 border-current/20" {...props} />,
+  table: ({ node, ...props }) => <table className="my-1 border-collapse text-xs" {...props} />,
+  th: ({ node, ...props }) => <th className="border border-current/20 px-1.5 py-0.5 font-semibold" {...props} />,
+  td: ({ node, ...props }) => <td className="border border-current/20 px-1.5 py-0.5" {...props} />,
+}
 
 export default function ChatPage() {
   const { channelId } = useParams()
@@ -204,14 +230,16 @@ export default function ChatPage() {
                         </div>
                       )}
                       <div className={cn(
-                        'inline-block rounded-2xl px-3 py-1 text-sm leading-snug',
+                        'inline-block rounded-2xl px-3 py-1 text-sm leading-snug break-words text-left',
                         isFromClaude
                           ? `${sColor.bg} border ${sColor.border} ${sColor.text}`
                           : isOwn
                             ? 'bg-primary text-primary-foreground'
                             : messageTypeStyles[msg.message_type] || 'bg-muted',
                       )}>
-                        {msg.content}
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                          {msg.content}
+                        </ReactMarkdown>
                       </div>
                       {msg.message_type && msg.message_type !== 'info' && !isOwn && !isFromClaude && (
                         <Badge variant="outline" className="mt-0.5 text-[10px]">{msg.message_type}</Badge>
