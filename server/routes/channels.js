@@ -88,16 +88,24 @@ router.post('/', async (req, res) => {
  */
 router.get('/:id', async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      const memberCheck = await pool.query(
-        'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
-        [req.params.id, req.user.id]
-      );
-      if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member of this channel' });
-    }
-
     const channelResult = await pool.query('SELECT * FROM channels WHERE id = $1', [req.params.id]);
     if (channelResult.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+
+    const memberCheck = await pool.query(
+      'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    if (memberCheck.rows.length === 0) {
+      if (req.user.role === 'admin') {
+        // Admins auto-join any channel they view
+        await pool.query(
+          'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [req.params.id, req.user.id, 'admin']
+        );
+      } else {
+        return res.status(403).json({ error: 'Not a member of this channel' });
+      }
+    }
 
     const membersResult = await pool.query(
       `SELECT u.id, u.email, u.name, u.avatar_url, u.last_seen_at, cm.role
