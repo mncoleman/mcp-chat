@@ -7,12 +7,25 @@ const pool = require('../db/pool');
  */
 router.get('/:channelId/messages', async (req, res) => {
   try {
-    // Verify membership
+    // Verify channel exists
+    const channelExists = await pool.query('SELECT 1 FROM channels WHERE id = $1', [req.params.channelId]);
+    if (channelExists.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+
+    // Verify membership (admins auto-join)
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [req.params.channelId, req.user.id]
     );
-    if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member of this channel' });
+    if (memberCheck.rows.length === 0) {
+      if (req.user.role === 'admin') {
+        await pool.query(
+          'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [req.params.channelId, req.user.id, 'admin']
+        );
+      } else {
+        return res.status(403).json({ error: 'Not a member of this channel' });
+      }
+    }
 
     const { before, limit: limitRaw = '50' } = req.query;
     const parsedLimit = parseInt(limitRaw, 10);
@@ -44,12 +57,25 @@ router.get('/:channelId/messages', async (req, res) => {
  */
 router.post('/:channelId/messages', async (req, res) => {
   try {
-    // Verify membership
+    // Verify channel exists
+    const channelExists = await pool.query('SELECT 1 FROM channels WHERE id = $1', [req.params.channelId]);
+    if (channelExists.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+
+    // Verify membership (admins auto-join)
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [req.params.channelId, req.user.id]
     );
-    if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member of this channel' });
+    if (memberCheck.rows.length === 0) {
+      if (req.user.role === 'admin') {
+        await pool.query(
+          'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [req.params.channelId, req.user.id, 'admin']
+        );
+      } else {
+        return res.status(403).json({ error: 'Not a member of this channel' });
+      }
+    }
 
     const { content, message_type = 'info', session_id, metadata } = req.body;
     if (!content || typeof content !== 'string') return res.status(400).json({ error: 'content is required' });
