@@ -77,6 +77,7 @@ app.get('/api/version', (req, res) => {
 
 // Auth (public)
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth/systematics', require('./routes/systematics-auth'));
 
 // MCP endpoints (auth handled internally)
 setupMcpRoutes(app);

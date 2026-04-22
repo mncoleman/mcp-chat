@@ -25,6 +25,10 @@ export function AuthProvider({ children }) {
     saveAuth(res.data.token, res.data.user)
   }, [])
 
+  const setSession = useCallback((newToken, newUser) => {
+    saveAuth(newToken, newUser)
+  }, [])
+
   const logout = useCallback(() => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
@@ -55,7 +59,7 @@ export function AuthProvider({ children }) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <AuthContext.Provider value={{ token, user, loginWithGoogle, logout, isAuthenticated: !!token }}>
+    <AuthContext.Provider value={{ token, user, loginWithGoogle, setSession, logout, isAuthenticated: !!token }}>
       {children}
     </AuthContext.Provider>
   )
