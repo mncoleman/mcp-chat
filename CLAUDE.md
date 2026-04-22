@@ -16,6 +16,8 @@ PostgreSQL with tables: `users`, `channels`, `channel_members`, `messages`, `ses
 
 Google OAuth via `@react-oauth/google` on frontend. Server verifies ID token with `google-auth-library`. First user auto-becomes admin. All others require email invite (admin creates invite with email, person must sign in with matching Google account).
 
+Sign in with Systematics is an optional second provider wired in `server/routes/systematics-auth.js`. The button renders on the login page only when all four `SYSTEMATICS_*` env vars are set. The server runs a standards-compliant authorization-code + PKCE flow against `SYSTEMATICS_ISSUER_URL`, verifies the id_token via JWKS (`jose`), and mirrors the Google flow for first-user/invite rules -- users are matched by email so a single user can sign in with either provider.
+
 ## Channels protocol
 
 The MCP server (`mcp-server/index.js`) integrates with Claude Code's channels research preview:

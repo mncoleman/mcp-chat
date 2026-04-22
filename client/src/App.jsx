@@ -7,6 +7,7 @@ import UsersPage from './pages/UsersPage.jsx'
 import ChannelsPage from './pages/ChannelsPage.jsx'
 import SetupPage from './pages/SetupPage.jsx'
 import ConnectPage from './pages/ConnectPage.jsx'
+import AuthComplete from './pages/AuthComplete.jsx'
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -26,6 +27,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/connect" element={<ConnectPage />} />
+      <Route path="/auth/systematics/complete" element={<AuthComplete />} />
       <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
         <Route index element={<Navigate to="/chat" replace />} />
         <Route path="chat" element={<ChatPage />} />
