@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS channels (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT,
+  instructions TEXT,
   created_by INTEGER REFERENCES users(id),
   is_archived BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -43,6 +43,9 @@ The MCP server (`mcp-server/index.js`) integrates with Claude Code's channels re
 - Chat UI groups consecutive messages from same user within 2 minutes
 - Multi-session: `register_session` assigns sequential labels (Session 1, 2...) per user per channel
 - `mcp_chat_join` connects to a channel by ID without browser auth (uses saved token from prior `mcp_chat_connect`)
+- Session naming is bidirectional: a session names itself via `mcp_chat_set_name` (or a `label` arg on `mcp_chat_connect`/`mcp_chat_join`); humans rename any session from the chat Sessions sidebar (`PATCH /api/sessions/:id`). Both broadcast a `session_renamed` WS event -- the renamed session learns its new name via a pushed channel notification, and browsers update the displayed name live.
+- Message attribution: every message broadcast/read includes the sender's `session_label` (joined from `sessions`), so the UI and other sessions see exactly which named session sent it. The client resolves names through a map (active sessions + history + live `session_renamed` events) so renames apply retroactively to existing messages.
+- Channel instructions: `channels.instructions` is a shared system prompt for a channel. Any member edits it via the chat header panel (`PUT /api/channels/:id/instructions`) or `mcp_chat_set_instructions`/`mcp_chat_instructions`. It is injected into a session's context on connect/join (via `register_session` response) and pushed live on change via the `channel_instructions_updated` WS event.
 
 ## Pages
 

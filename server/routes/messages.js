@@ -95,6 +95,12 @@ router.post('/:channelId/messages', async (req, res) => {
     // Attach user info for broadcast
     message.user_name = req.user.name;
 
+    // Attach session label so the sending session is identifiable live
+    if (message.session_id) {
+      const labelResult = await pool.query('SELECT label FROM sessions WHERE session_token = $1', [message.session_id]);
+      message.session_label = labelResult.rows[0]?.label || null;
+    }
+
     // Broadcast via WebSocket (attached by server index)
     if (req.app.locals.broadcast) {
       req.app.locals.broadcast(req.params.channelId, {

@@ -137,7 +137,7 @@ function connectWebSocket() {
         if (msg.session_id === sessionState.sessionToken) return;
 
         const senderLabel = msg.session_id
-          ? `${msg.user_name?.split(' ')[0]}'s Claude`
+          ? `${msg.user_name?.split(' ')[0]}'s Claude${msg.session_label ? ` (${msg.session_label})` : ''}`
           : msg.user_name || 'unknown';
 
         pushChannelMessage('mcp-chat', msg.content, {
@@ -145,6 +145,27 @@ function connectWebSocket() {
           user: senderLabel,
           message_type: msg.message_type || 'info',
           timestamp: msg.created_at || new Date().toISOString(),
+        });
+      } else if (data.type === 'session_renamed') {
+        // Only react when this session itself was renamed (e.g. from the browser)
+        if (data.session_token !== sessionState.sessionToken) return;
+        if (data.label === sessionState.sessionLabel) return;
+        sessionState.sessionLabel = data.label;
+        pushChannelMessage('mcp-chat', `This session has been named "${data.label}". Refer to yourself as "${data.label}" in #${sessionState.channelName}.`, {
+          channel: sessionState.channelName,
+          event: 'session_renamed',
+          session_label: data.label,
+        });
+      } else if (data.type === 'channel_instructions_updated') {
+        // Skip the echo of a change this session just made itself
+        if ((data.instructions || null) === sessionState.sessionInstructions) return;
+        sessionState.sessionInstructions = data.instructions || null;
+        const body = data.instructions
+          ? `Channel instructions for #${sessionState.channelName} were updated${data.updated_by ? ` by ${data.updated_by}` : ''}. Follow these instructions for this channel:\n\n${data.instructions}`
+          : `Channel instructions for #${sessionState.channelName} were cleared.`;
+        pushChannelMessage('mcp-chat', body, {
+          channel: sessionState.channelName,
+          event: 'channel_instructions_updated',
         });
       } else if (data.type === 'presence') {
         // Only push presence for Claude Code sessions (have session_token), not browser refreshes
@@ -260,6 +281,7 @@ let sessionState = {
   userId: null,
   sessionToken: null,
   sessionLabel: null,
+  sessionInstructions: null,
   connected: false,
 };
 
@@ -292,15 +314,19 @@ if (envToken && envChannel) {
     userId,
     sessionToken,
     sessionLabel: null,
+    sessionInstructions: null,
     connected: true,
   };
 
-  // Register session for sequential label, then connect WebSocket
+  // Register session for label + channel instructions, then connect WebSocket
   apiCall('register_session', {
     channel_id: sessionState.channelId,
     session_token: sessionToken,
+    label: process.env.MCP_CHAT_SESSION_NAME || undefined,
   }, envToken).then(result => {
     sessionState.sessionLabel = result.label || 'Session';
+    sessionState.sessionInstructions = result.instructions || null;
+    if (result.channel_name) sessionState.channelName = result.channel_name;
     process.stderr.write(`[mcp-chat] Auto-connected to #${sessionState.channelName} as ${userName} (${sessionState.sessionLabel})\n`);
   }).catch(() => {
     process.stderr.write(`[mcp-chat] Auto-connected to #${sessionState.channelName} as ${userName}\n`);
@@ -324,9 +350,15 @@ function getTools() {
     {
       name: 'mcp_chat_connect',
       description: sessionState.connected
-        ? `Currently connected to #${sessionState.channelName} as ${sessionState.userName}. Live messages are being pushed into this session. Run again to switch channels.`
-        : 'Connect to MCP Chat. Opens your browser to authenticate and select a channel. Once connected, messages will be pushed into this session in real-time.',
-      inputSchema: { type: 'object', properties: {}, required: [] },
+        ? `Currently connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'}). Live messages are being pushed into this session. Run again to switch channels.`
+        : 'Connect to MCP Chat. Opens your browser to authenticate and select a channel. Once connected, messages will be pushed into this session in real-time. Optionally pass a label to name this session.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          label: { type: 'string', description: 'Optional name for this session (e.g. "Backend Dev", "QA"). Defaults to a sequential "Session N".' },
+        },
+        required: [],
+      },
     },
     {
       name: 'mcp_chat_send',
@@ -414,6 +446,33 @@ function getTools() {
         },
       },
     },
+    {
+      name: 'mcp_chat_set_name',
+      description: 'Set or change the name of your own session. Other participants (and you) will see this name on every message you send.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'The name for this session (e.g. "Backend Dev", "QA Agent").' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'mcp_chat_instructions',
+      description: 'Show the current channel instructions (a shared system prompt set for everyone in the channel).',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'mcp_chat_set_instructions',
+      description: 'Set the channel instructions: a shared system prompt that every connected session in the channel sees. Pass an empty string to clear. Any channel member can set these.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          instructions: { type: 'string', description: 'The shared instructions for the channel. Empty string clears them.' },
+        },
+        required: ['instructions'],
+      },
+    },
   ];
 }
 
@@ -442,19 +501,22 @@ async function handleToolCall(name, args) {
           userId,
           sessionToken,
           sessionLabel: null,
+          sessionInstructions: null,
           connected: true,
         };
         saveConfig({ token: result.token, userName: result.userName, userId });
 
-        // Register session to get sequential label
-        let sessionLabel = 'Session';
+        // Register session to get label (custom or sequential) + channel instructions
+        let sessionLabel = args.label || 'Session';
         try {
           const regResult = await apiCall('register_session', {
             channel_id: result.channelId,
             session_token: sessionToken,
+            label: args.label || undefined,
           }, result.token);
-          sessionLabel = regResult.label || 'Session';
+          sessionLabel = regResult.label || sessionLabel;
           sessionState.sessionLabel = sessionLabel;
+          sessionState.sessionInstructions = regResult.instructions || null;
         } catch {}
 
         // Start WebSocket listener for real-time push
@@ -462,7 +524,10 @@ async function handleToolCall(name, args) {
 
         // Check for package updates
         const updateNotice = await checkForUpdate();
-        let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
+        let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Your session is named "${sessionLabel}" -- this name appears on every message you send. Use mcp_chat_set_name to change it. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
+        if (sessionState.sessionInstructions) {
+          responseText += `\n\nChannel instructions for #${result.channelName} (apply these while in this channel):\n${sessionState.sessionInstructions}`;
+        }
         if (updateNotice) {
           responseText += `\n\n${updateNotice}`;
         }
@@ -498,10 +563,11 @@ async function handleToolCall(name, args) {
           channelName: channel.name,
           sessionToken,
           sessionLabel: null,
+          sessionInstructions: null,
           connected: true,
         };
 
-        // Register session to get label (custom or sequential)
+        // Register session to get label (custom or sequential) + channel instructions
         let sessionLabel = args.label || 'Session';
         try {
           const regResult = await apiCall('register_session', {
@@ -511,10 +577,15 @@ async function handleToolCall(name, args) {
           }, sessionState.token);
           sessionLabel = regResult.label || sessionLabel;
           sessionState.sessionLabel = sessionLabel;
+          sessionState.sessionInstructions = regResult.instructions || null;
         } catch {}
 
         connectWebSocket();
-        return { content: [{ type: 'text', text: `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Live messages are now being pushed.` }] };
+        let joinText = `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Your session is named "${sessionLabel}"; use mcp_chat_set_name to change it. Live messages are now being pushed.`;
+        if (sessionState.sessionInstructions) {
+          joinText += `\n\nChannel instructions for #${channel.name} (apply these while in this channel):\n${sessionState.sessionInstructions}`;
+        }
+        return { content: [{ type: 'text', text: joinText }] };
       } catch (err) {
         return { content: [{ type: 'text', text: `Failed to join channel: ${err.message}` }], isError: true };
       }
@@ -550,9 +621,12 @@ async function handleToolCall(name, args) {
       if (!result.messages || result.messages.length === 0) {
         return { content: [{ type: 'text', text: `No messages in #${sessionState.channelName}` }] };
       }
-      const formatted = result.messages.map(m =>
-        `[${new Date(m.created_at).toLocaleTimeString()}] ${m.user_name}: ${m.content}`
-      ).join('\n');
+      const formatted = result.messages.map(m => {
+        const sender = m.session_id
+          ? `${m.user_name?.split(' ')[0]}'s Claude${m.session_label ? ` (${m.session_label})` : ''}`
+          : m.user_name;
+        return `[${new Date(m.created_at).toLocaleTimeString()}] ${sender}: ${m.content}`;
+      }).join('\n');
       return { content: [{ type: 'text', text: `Messages in #${sessionState.channelName}:\n${formatted}` }] };
     }
 
@@ -589,7 +663,11 @@ async function handleToolCall(name, args) {
         return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_connect or mcp_chat_join to pick a channel.' : 'Not connected. Run mcp_chat_connect to authenticate and select a channel.' }] };
       }
       const wsStatus = wsConnection?.readyState === 1 ? 'live (receiving messages)' : 'reconnecting...';
-      return { content: [{ type: 'text', text: `Connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'})\nWebSocket: ${wsStatus}` }] };
+      let statusText = `Connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'})\nWebSocket: ${wsStatus}`;
+      if (sessionState.sessionInstructions) {
+        statusText += `\n\nChannel instructions:\n${sessionState.sessionInstructions}`;
+      }
+      return { content: [{ type: 'text', text: statusText }] };
     }
 
     case 'mcp_chat_create_channel': {
@@ -638,6 +716,50 @@ async function handleToolCall(name, args) {
       return { content: [{ type: 'text', text: `Channel updated: #${result.channel.name}${result.channel.description ? ` -- ${result.channel.description}` : ''}` }] };
     }
 
+    case 'mcp_chat_set_name': {
+      if (!sessionState.connected) {
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+      }
+      const newName = String(args.name || '').trim().slice(0, 100);
+      if (!newName) return { content: [{ type: 'text', text: 'A name is required.' }], isError: true };
+      const result = await apiCall('rename_session', {
+        session_token: sessionState.sessionToken,
+        label: newName,
+      }, sessionState.token);
+      if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      sessionState.sessionLabel = result.label || newName;
+      return { content: [{ type: 'text', text: `Your session is now named "${sessionState.sessionLabel}" in #${sessionState.channelName}. This name appears on every message you send.` }] };
+    }
+
+    case 'mcp_chat_instructions': {
+      if (!sessionState.connected) {
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+      }
+      if (!sessionState.sessionInstructions) {
+        return { content: [{ type: 'text', text: `No instructions are set for #${sessionState.channelName}. Set them with mcp_chat_set_instructions.` }] };
+      }
+      return { content: [{ type: 'text', text: `Channel instructions for #${sessionState.channelName}:\n${sessionState.sessionInstructions}` }] };
+    }
+
+    case 'mcp_chat_set_instructions': {
+      if (!sessionState.connected) {
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+      }
+      if (typeof args.instructions !== 'string') {
+        return { content: [{ type: 'text', text: 'instructions (string) is required. Pass an empty string to clear.' }], isError: true };
+      }
+      const instructions = args.instructions.slice(0, 10000);
+      const result = await apiCall('set_channel_instructions', {
+        channel_id: sessionState.channelId,
+        instructions,
+      }, sessionState.token);
+      if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      sessionState.sessionInstructions = result.instructions || null;
+      return { content: [{ type: 'text', text: result.instructions
+        ? `Channel instructions for #${sessionState.channelName} updated. All connected sessions will see them.`
+        : `Channel instructions for #${sessionState.channelName} cleared.` }] };
+    }
+
     default:
       return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
   }
@@ -656,7 +778,7 @@ async function handleMessage(msg) {
           tools: {},
           experimental: { 'claude/channel': {} },
         },
-        serverInfo: { name: 'mcp-chat-connect', version: '1.1.0' },
+        serverInfo: { name: 'mcp-chat-connect', version: LOCAL_VERSION },
       });
       break;
 
