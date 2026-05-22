@@ -105,7 +105,13 @@ The `mcp-chat-connect` package requires 2FA for npm publish. Claude cannot publi
 cd mcp-server && npm publish
 ```
 
-After every version bump, also update the `MCP_CONNECT_LATEST` default in `server/index.js` to match the new version so the version check endpoint returns the correct latest version. If deploying with env vars, update the `MCP_CONNECT_LATEST` env var on the server as well.
+After every version bump, the `MCP_CONNECT_LATEST` value (what `/api/version` returns for the npm client's update notice) must be updated in **all** of these, since they shadow each other in this order (last wins):
+
+1. `server/index.js` -- code default (`process.env.MCP_CONNECT_LATEST || '1.4.0'`); only used if nothing below is set.
+2. `docker-compose.yml` -- compose fallback (`${MCP_CONNECT_LATEST:-1.4.0}`); used on the server when the env var is absent. This was the one that previously drifted and reported a stale version.
+3. Server `.env` at `/opt/mcp-chat/.env` -- `MCP_CONNECT_LATEST=...`; overrides everything above. Update it and run `docker compose up -d app` to apply.
+
+Keep all three in sync with the published package version. The `.env` value is authoritative in production; the compose default is the safety net if `.env` is ever missing the line.
 
 ## Rules
 
