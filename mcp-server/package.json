@@ -4,7 +4,7 @@
   "description": "MCP server with channels support for connecting Claude Code sessions to MCP Chat -- real-time team messaging for AI-assisted development",
   "main": "index.js",
   "bin": {
-    "mcp-chat-connect": "./index.js"
+    "mcp-chat-connect": "index.js"
   },
   "keywords": [
     "mcp",
@@ -20,7 +20,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mncoleman/mcp-chat.git",
+    "url": "git+https://github.com/mncoleman/mcp-chat.git",
     "directory": "mcp-server"
   },
   "engines": {
