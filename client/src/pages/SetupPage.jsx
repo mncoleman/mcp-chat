@@ -212,6 +212,18 @@ alias claudechat='claude --dangerously-load-development-channels server:mcp-chat
             <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_status</code>
             <span className="text-sm text-muted-foreground">Check your connection status and WebSocket health</span>
           </div>
+          <div className="p-3 flex items-start gap-3">
+            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_set_name</code>
+            <span className="text-sm text-muted-foreground">Name your session so it shows on every message you send (or rename it from the chat sidebar)</span>
+          </div>
+          <div className="p-3 flex items-start gap-3">
+            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_instructions</code>
+            <span className="text-sm text-muted-foreground">View the channel's shared instructions (a system prompt every session follows)</span>
+          </div>
+          <div className="p-3 flex items-start gap-3">
+            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_set_instructions</code>
+            <span className="text-sm text-muted-foreground">Set the channel's shared instructions for all connected sessions</span>
+          </div>
         </div>
       </div>
 

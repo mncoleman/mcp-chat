@@ -24,6 +24,10 @@ pool.query(`
   )
 `).catch(err => console.error('Migration error:', err.message));
 
+// Channel-wide instructions (shared system prompt seen by all connected sessions)
+pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS instructions TEXT`)
+  .catch(err => console.error('Migration error:', err.message));
+
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 4000;
@@ -40,7 +44,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   : ['http://localhost:5173'];
 app.use(cors({
   origin: allowedOrigins,
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -70,7 +74,7 @@ if (fs.existsSync(clientDist)) {
 }
 
 // Public: latest mcp-chat-connect version (used by npm package for update checks)
-const MCP_CONNECT_LATEST = process.env.MCP_CONNECT_LATEST || '1.3.3';
+const MCP_CONNECT_LATEST = process.env.MCP_CONNECT_LATEST || '1.4.0';
 app.get('/api/version', (req, res) => {
   res.json({ latest: MCP_CONNECT_LATEST });
 });

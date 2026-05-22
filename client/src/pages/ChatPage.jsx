@@ -10,7 +10,8 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Send, Hash, Wifi, WifiOff, Monitor, Terminal } from 'lucide-react'
+import { Send, Hash, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X } from 'lucide-react'
+import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -46,11 +47,29 @@ export default function ChatPage() {
   const [input, setInput] = useState('')
   const messagesEndRef = useRef(null)
 
+  // Channel instructions editor state
+  const [showInstructions, setShowInstructions] = useState(false)
+  const [editingInstructions, setEditingInstructions] = useState(false)
+  const [instructionsDraft, setInstructionsDraft] = useState('')
+  const [savingInstructions, setSavingInstructions] = useState(false)
+
+  // Session rename state
+  const [editingSessionId, setEditingSessionId] = useState(null)
+  const [sessionLabelDraft, setSessionLabelDraft] = useState('')
+
   // Refetch channel details when a Claude session connects/disconnects
   const onSessionPresenceChange = useCallback(() => {
     if (channelId) {
       queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
     }
+  }, [channelId, queryClient])
+
+  // React to live instruction changes from other members/sessions
+  const onInstructionsChange = useCallback((instructions, updatedBy) => {
+    if (channelId) {
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+    }
+    toast.info(updatedBy ? `${updatedBy} updated the channel instructions` : 'Channel instructions updated')
   }, [channelId, queryClient])
 
   // Fetch user's channels
@@ -81,10 +100,23 @@ export default function ChatPage() {
   })
 
   // WebSocket for real-time
-  const { messages: wsMessages, presence, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange })
+  const { messages: wsMessages, presence, sessionLabels: liveSessionLabels, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange })
 
   // Combine history + live messages
   const allMessages = [...history, ...wsMessages]
+
+  // Resolve each session's current name: active sessions + message history,
+  // with live rename events (liveSessionLabels) taking precedence.
+  const sessionLabelMap = useMemo(() => {
+    const map = {}
+    channelDetails?.active_sessions?.forEach(s => {
+      if (s.session_token && s.label) map[s.session_token] = s.label
+    })
+    allMessages.forEach(m => {
+      if (m.session_id && m.session_label && !map[m.session_id]) map[m.session_id] = m.session_label
+    })
+    return { ...map, ...liveSessionLabels }
+  }, [channelDetails, allMessages, liveSessionLabels])
 
   // Assign stable colors to different Claude sessions
   const SESSION_COLORS = [
@@ -117,6 +149,42 @@ export default function ChatPage() {
     if (!input.trim()) return
     sendMessage(input.trim())
     setInput('')
+  }
+
+  const openInstructionsEditor = () => {
+    setInstructionsDraft(channelDetails?.instructions || '')
+    setEditingInstructions(true)
+    setShowInstructions(true)
+  }
+
+  const handleSaveInstructions = async () => {
+    setSavingInstructions(true)
+    try {
+      await api.put(`/api/channels/${channelId}/instructions`, {
+        instructions: instructionsDraft.trim() || null,
+      })
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+      setEditingInstructions(false)
+      toast.success('Channel instructions saved')
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save instructions')
+    } finally {
+      setSavingInstructions(false)
+    }
+  }
+
+  const handleRenameSession = async (sessionId) => {
+    const label = sessionLabelDraft.trim()
+    if (!label) { setEditingSessionId(null); return }
+    try {
+      await api.patch(`/api/sessions/${sessionId}`, { label })
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+      toast.success(`Session renamed to "${label}"`)
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to rename session')
+    } finally {
+      setEditingSessionId(null)
+    }
   }
 
   const messageTypeStyles = {
@@ -168,6 +236,17 @@ export default function ChatPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant={channelDetails?.instructions ? 'secondary' : 'ghost'}
+                size="sm"
+                className="gap-1.5 h-8"
+                onClick={() => setShowInstructions((v) => !v)}
+                title="Channel instructions"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Instructions</span>
+                {channelDetails?.instructions && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
+              </Button>
               {isConnected ? (
                 <Badge variant="success" className="gap-1">
                   <Wifi className="h-3 w-3" /> Live
@@ -180,6 +259,57 @@ export default function ChatPage() {
             </div>
           </div>
 
+          {/* Channel instructions panel */}
+          {showInstructions && (
+            <div className="border-b bg-muted/30 px-4 py-3 shrink-0">
+              <div className="max-w-3xl mx-auto">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    <FileText className="h-3.5 w-3.5" /> Channel Instructions
+                  </div>
+                  {!editingInstructions && (
+                    <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={openInstructionsEditor}>
+                      <Pencil className="h-3 w-3" /> Edit
+                    </Button>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground mb-2">
+                  A shared system prompt all connected Claude sessions in this channel will follow.
+                </p>
+                {editingInstructions ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={instructionsDraft}
+                      onChange={(e) => setInstructionsDraft(e.target.value)}
+                      rows={5}
+                      maxLength={10000}
+                      placeholder="e.g. We are debugging the payments service. Prefer concise status updates. Flag any schema changes."
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" className="h-8 gap-1.5" onClick={handleSaveInstructions} disabled={savingInstructions}>
+                        <Check className="h-3.5 w-3.5" /> Save
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-8 gap-1.5" onClick={() => setEditingInstructions(false)} disabled={savingInstructions}>
+                        <X className="h-3.5 w-3.5" /> Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : channelDetails?.instructions ? (
+                  <div className="text-sm rounded-md bg-background border px-3 py-2">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                      {channelDetails.instructions}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">
+                    No instructions set. <button className="underline hover:opacity-80" onClick={openInstructionsEditor}>Add some</button> to guide every session in this channel.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Messages */}
           <ScrollArea className="flex-1 p-4">
             <div className="space-y-0.5 max-w-3xl mx-auto">
@@ -187,8 +317,9 @@ export default function ChatPage() {
                 const isFromClaude = !!msg.session_id
                 const isOwn = msg.user_id === user?.id
                 const sColor = isFromClaude ? (sessionColorMap[msg.session_id] || SESSION_COLORS[0]) : null
+                const resolvedLabel = isFromClaude ? sessionLabelMap[msg.session_id] : null
                 const displayName = isFromClaude
-                  ? `${msg.user_name?.split(' ')[0]}'s Claude${msg.session_label ? ` (${msg.session_label})` : ''}`
+                  ? `${msg.user_name?.split(' ')[0]}'s Claude${resolvedLabel ? ` (${resolvedLabel})` : ''}`
                   : msg.user_name
                 const prev = allMessages[i - 1]
                 const prevIsFromClaude = !!prev?.session_id
@@ -316,15 +447,50 @@ export default function ChatPage() {
             <div className="px-2 mb-2 text-xs font-semibold text-muted-foreground uppercase">
               Claude Sessions
             </div>
-            {channelDetails?.active_sessions?.map((session) => (
-              <div key={session.id} className="flex items-center gap-2 px-2 py-1.5">
-                <Monitor className="h-4 w-4 text-green-500" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium truncate">{session.label || 'Session'}</p>
-                  <p className="text-xs text-muted-foreground truncate">{session.user_name}</p>
+            {channelDetails?.active_sessions?.map((session) => {
+              const liveLabel = (session.session_token && liveSessionLabels[session.session_token]) || session.label || 'Session'
+              const isEditing = editingSessionId === session.id
+              return (
+                <div key={session.id} className="group flex items-center gap-2 px-2 py-1.5">
+                  <Monitor className="h-4 w-4 text-green-500 shrink-0" />
+                  {isEditing ? (
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <input
+                        autoFocus
+                        value={sessionLabelDraft}
+                        onChange={(e) => setSessionLabelDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleRenameSession(session.id)
+                          if (e.key === 'Escape') setEditingSessionId(null)
+                        }}
+                        maxLength={100}
+                        className="flex-1 min-w-0 rounded border border-input bg-background px-1.5 py-0.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      />
+                      <button className="text-green-600 hover:opacity-80" onClick={() => handleRenameSession(session.id)} title="Save">
+                        <Check className="h-3.5 w-3.5" />
+                      </button>
+                      <button className="text-muted-foreground hover:opacity-80" onClick={() => setEditingSessionId(null)} title="Cancel">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium truncate">{liveLabel}</p>
+                        <p className="text-xs text-muted-foreground truncate">{session.user_name}</p>
+                      </div>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity shrink-0"
+                        onClick={() => { setEditingSessionId(session.id); setSessionLabelDraft(liveLabel) }}
+                        title="Rename session"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </>
+                  )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
             {(!channelDetails?.active_sessions || channelDetails.active_sessions.length === 0) && (
               <p className="px-2 text-xs text-muted-foreground">No active sessions</p>
             )}

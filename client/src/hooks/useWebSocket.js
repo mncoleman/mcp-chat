@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
+export function useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange } = {}) {
   const wsRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [presence, setPresence] = useState({})
+  const [sessionLabels, setSessionLabels] = useState({})
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef(null)
   const onSessionPresenceChangeRef = useRef(onSessionPresenceChange)
   onSessionPresenceChangeRef.current = onSessionPresenceChange
+  const onInstructionsChangeRef = useRef(onInstructionsChange)
+  onInstructionsChangeRef.current = onInstructionsChange
 
   const connect = useCallback(() => {
     const token = localStorage.getItem('token')
@@ -57,6 +60,14 @@ export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
         if (data.session_token && onSessionPresenceChangeRef.current) {
           onSessionPresenceChangeRef.current()
         }
+      } else if (data.type === 'session_renamed') {
+        if (data.session_token) {
+          setSessionLabels((prev) => ({ ...prev, [data.session_token]: data.label }))
+        }
+      } else if (data.type === 'channel_instructions_updated') {
+        if (onInstructionsChangeRef.current) {
+          onInstructionsChangeRef.current(data.instructions, data.updated_by)
+        }
       }
     }
 
@@ -73,6 +84,7 @@ export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
   useEffect(() => {
     setMessages([])
     setPresence({})
+    setSessionLabels({})
     connect()
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current)
@@ -88,5 +100,5 @@ export function useWebSocket(channelId, { onSessionPresenceChange } = {}) {
 
   const clearMessages = useCallback(() => setMessages([]), [])
 
-  return { messages, presence, isConnected, sendMessage, clearMessages }
+  return { messages, presence, sessionLabels, isConnected, sendMessage, clearMessages }
 }

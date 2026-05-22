@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { v4: uuidv4 } = require('uuid');
+const { broadcastToChannel } = require('../ws/index');
 
 /**
  * POST /api/sessions - Register a new Claude Code session
@@ -46,6 +47,48 @@ router.get('/', async (req, res) => {
       [req.user.id]
     );
     res.json(result.rows);
+  } catch (err) {
+    console.error('[sessions]', err); res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * PATCH /api/sessions/:id - Rename a session.
+ * Any member of the session's channel can rename it; the new name is pushed
+ * live to the session's MCP client so the session learns its own name.
+ */
+router.patch('/:id', async (req, res) => {
+  try {
+    const { label } = req.body;
+    if (!label || typeof label !== 'string' || !label.trim()) {
+      return res.status(400).json({ error: 'label is required' });
+    }
+    if (label.length > 100) return res.status(400).json({ error: 'Label too long (max 100 characters)' });
+
+    const sessionResult = await pool.query('SELECT id, channel_id, session_token FROM sessions WHERE id = $1', [req.params.id]);
+    if (sessionResult.rows.length === 0) return res.status(404).json({ error: 'Session not found' });
+    const session = sessionResult.rows[0];
+
+    // Verify caller is a member of the session's channel (admins allowed)
+    const memberCheck = await pool.query(
+      'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+      [session.channel_id, req.user.id]
+    );
+    if (memberCheck.rows.length === 0 && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not a member of this channel' });
+    }
+
+    const newLabel = label.trim();
+    await pool.query('UPDATE sessions SET label = $1 WHERE id = $2', [newLabel, session.id]);
+
+    broadcastToChannel(String(session.channel_id), {
+      type: 'session_renamed',
+      session_token: session.session_token,
+      session_id: session.id,
+      label: newLabel,
+    });
+
+    res.json({ id: session.id, label: newLabel });
   } catch (err) {
     console.error('[sessions]', err); res.status(500).json({ error: 'Internal server error' });
   }

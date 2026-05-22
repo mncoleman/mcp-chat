@@ -152,6 +152,15 @@ function setupMcpRoutes(app) {
           const message = result.rows[0];
           message.user_name = user.name;
 
+          // Attach the sender session's label so live messages show which session sent them
+          if (session_token) {
+            const labelResult = await pool.query(
+              'SELECT label FROM sessions WHERE session_token = $1',
+              [session_token]
+            );
+            message.session_label = labelResult.rows[0]?.label || null;
+          }
+
           // Broadcast to WebSocket clients (browser UI)
           broadcastToChannel(String(channel_id), { type: 'new_message', message });
 
@@ -163,7 +172,7 @@ function setupMcpRoutes(app) {
 
         case 'list_channels': {
           const result = await pool.query(
-            `SELECT c.id, c.name, c.description
+            `SELECT c.id, c.name, c.description, c.instructions
              FROM channels c
              JOIN channel_members cm ON cm.channel_id = c.id AND cm.user_id = $1
              WHERE c.is_archived = false`,
@@ -185,8 +194,11 @@ function setupMcpRoutes(app) {
           }
 
           const result = await pool.query(
-            `SELECT m.id, m.content, m.message_type, m.session_id, m.created_at, u.name as user_name
-             FROM messages m JOIN users u ON u.id = m.user_id
+            `SELECT m.id, m.content, m.message_type, m.session_id, m.created_at, u.name as user_name,
+                    s.label as session_label
+             FROM messages m
+             JOIN users u ON u.id = m.user_id
+             LEFT JOIN sessions s ON s.session_token = m.session_id
              WHERE m.channel_id = $1
              ORDER BY m.created_at DESC LIMIT $2`,
             [channel_id, Math.min(parseInt(limit), 100)]
@@ -239,12 +251,13 @@ function setupMcpRoutes(app) {
 
           // Use custom label if provided, otherwise assign sequential number
           let label = args.label;
+          let sessionNumber = null;
           if (!label) {
             const activeResult = await pool.query(
               'SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND channel_id = $2 AND is_connected = true',
               [user.id, channel_id]
             );
-            const sessionNumber = parseInt(activeResult.rows[0].count) + 1;
+            sessionNumber = parseInt(activeResult.rows[0].count) + 1;
             label = `Session ${sessionNumber}`;
           }
 
@@ -256,7 +269,91 @@ function setupMcpRoutes(app) {
             [session_token, user.id, channel_id, label]
           );
 
-          return res.json({ label, session_number: sessionNumber, session_token });
+          // Broadcast so browsers refresh the active-session list and reflect the label
+          broadcastToChannel(String(channel_id), {
+            type: 'session_renamed',
+            session_token,
+            label,
+          });
+
+          // Return channel name + shared instructions so the session learns its context
+          const channelInfo = await pool.query(
+            'SELECT name, instructions FROM channels WHERE id = $1',
+            [channel_id]
+          );
+
+          return res.json({
+            label,
+            session_number: sessionNumber,
+            session_token,
+            channel_name: channelInfo.rows[0]?.name || null,
+            instructions: channelInfo.rows[0]?.instructions || null,
+          });
+        }
+
+        case 'rename_session': {
+          const { session_token, label } = args;
+          if (!session_token || !label || typeof label !== 'string' || !label.trim()) {
+            return res.json({ error: 'session_token and label are required' });
+          }
+          if (label.length > 100) return res.json({ error: 'Label too long (max 100 characters)' });
+
+          // Verify the session belongs to this user
+          const sessRes = await pool.query(
+            'SELECT id, channel_id, user_id FROM sessions WHERE session_token = $1',
+            [session_token]
+          );
+          if (sessRes.rows.length === 0) return res.json({ error: 'Session not found' });
+          if (sessRes.rows[0].user_id !== user.id) {
+            return res.status(403).json({ error: 'You can only rename your own session' });
+          }
+
+          const newLabel = label.trim();
+          await pool.query('UPDATE sessions SET label = $1 WHERE session_token = $2', [newLabel, session_token]);
+
+          broadcastToChannel(String(sessRes.rows[0].channel_id), {
+            type: 'session_renamed',
+            session_token,
+            session_id: sessRes.rows[0].id,
+            label: newLabel,
+          });
+
+          return res.json({ success: true, label: newLabel });
+        }
+
+        case 'set_channel_instructions': {
+          const { channel_id, instructions } = args;
+          if (!channel_id) return res.json({ error: 'channel_id is required' });
+          if (instructions !== null && instructions !== undefined && typeof instructions !== 'string') {
+            return res.json({ error: 'instructions must be a string or null' });
+          }
+          if (typeof instructions === 'string' && instructions.length > 10000) {
+            return res.json({ error: 'Instructions too long (max 10000 characters)' });
+          }
+
+          // Verify membership (any member can edit)
+          const instrMemberCheck = await pool.query(
+            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+            [channel_id, user.id]
+          );
+          if (instrMemberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member of this channel' });
+          }
+
+          const result = await pool.query(
+            'UPDATE channels SET instructions = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, instructions',
+            [instructions || null, channel_id]
+          );
+          if (result.rows.length === 0) return res.json({ error: 'Channel not found' });
+
+          broadcastToChannel(String(channel_id), {
+            type: 'channel_instructions_updated',
+            channel_id: Number(channel_id),
+            instructions: result.rows[0].instructions,
+            updated_by: user.name,
+          });
+
+          return res.json({ success: true, instructions: result.rows[0].instructions });
         }
 
         case 'create_channel': {

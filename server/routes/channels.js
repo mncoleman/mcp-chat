@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { requireAdmin } = require('../middleware/auth');
+const { broadcastToChannel } = require('../ws/index');
 
 /**
  * GET /api/channels - List channels
@@ -117,7 +118,7 @@ router.get('/:id', async (req, res) => {
     );
 
     const sessionsResult = await pool.query(
-      `SELECT s.id, s.label, s.is_connected, s.connected_at, u.name as user_name, u.id as user_id
+      `SELECT s.id, s.session_token, s.label, s.is_connected, s.connected_at, u.name as user_name, u.id as user_id
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.channel_id = $1 AND s.is_connected = true
@@ -130,6 +131,56 @@ router.get('/:id', async (req, res) => {
       members: membersResult.rows,
       active_sessions: sessionsResult.rows,
     });
+  } catch (err) {
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * PUT /api/channels/:id/instructions - Set channel instructions (any member)
+ * Instructions act as a shared system prompt seen by all connected sessions.
+ */
+router.put('/:id/instructions', async (req, res) => {
+  try {
+    const { instructions } = req.body;
+    if (instructions !== null && instructions !== undefined && typeof instructions !== 'string') {
+      return res.status(400).json({ error: 'instructions must be a string or null' });
+    }
+    if (typeof instructions === 'string' && instructions.length > 10000) {
+      return res.status(400).json({ error: 'Instructions too long (max 10000 characters)' });
+    }
+
+    // Verify membership (admins auto-join)
+    const memberCheck = await pool.query(
+      'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    if (memberCheck.rows.length === 0) {
+      if (req.user.role === 'admin') {
+        await pool.query(
+          'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [req.params.id, req.user.id, 'admin']
+        );
+      } else {
+        return res.status(403).json({ error: 'Not a member of this channel' });
+      }
+    }
+
+    const result = await pool.query(
+      'UPDATE channels SET instructions = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, instructions',
+      [instructions || null, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+
+    // Notify browsers and connected Claude sessions
+    broadcastToChannel(String(req.params.id), {
+      type: 'channel_instructions_updated',
+      channel_id: Number(req.params.id),
+      instructions: result.rows[0].instructions,
+      updated_by: req.user.name,
+    });
+
+    res.json(result.rows[0]);
   } catch (err) {
     console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }
