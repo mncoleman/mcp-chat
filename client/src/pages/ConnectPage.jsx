@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { GoogleLogin } from '@react-oauth/google'
@@ -8,6 +8,7 @@ import api from '@/lib/axios.js'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Radio, Hash, Check, Terminal, Plus } from 'lucide-react'
+import { SystematicsMark } from './Login.jsx'
 
 export default function ConnectPage() {
   const [searchParams] = useSearchParams()
@@ -20,6 +21,23 @@ export default function ConnectPage() {
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
   const [creating, setCreating] = useState(false)
+  const [siwsEnabled, setSiwsEnabled] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api.get('/api/auth/systematics/config')
+      .then((res) => { if (!cancelled) setSiwsEnabled(Boolean(res.data?.enabled)) })
+      .catch(() => { if (!cancelled) setSiwsEnabled(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  // Systematics uses a full-page redirect, so we pass this page (with its callback param)
+  // as return_to and the server brings us back here after sign-in to finish the connect.
+  const handleSystematicsLogin = () => {
+    const base = api.defaults.baseURL || ''
+    const returnTo = `${window.location.pathname}${window.location.search}`
+    window.location.href = `${base}/api/auth/systematics/login?return_to=${encodeURIComponent(returnTo)}`
+  }
 
   const { data: channels = [] } = useQuery({
     queryKey: ['channels'],
@@ -106,9 +124,9 @@ export default function ConnectPage() {
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">1</Badge>
-              <span className="font-semibold">Sign in with Google</span>
+              <span className="font-semibold">Sign in</span>
             </div>
-            <div className="flex justify-center">
+            <div className="flex flex-col items-center gap-3">
               <GoogleLogin
                 onSuccess={async (credentialResponse) => {
                   try {
@@ -120,7 +138,26 @@ export default function ConnectPage() {
                 onError={() => toast.error('Google login failed')}
                 theme="outline"
                 size="large"
+                width="320"
               />
+
+              {siwsEnabled && (
+                <>
+                  <div className="flex w-[320px] items-center gap-3 text-xs text-muted-foreground">
+                    <div className="h-px flex-1 bg-border" />
+                    <span>or</span>
+                    <div className="h-px flex-1 bg-border" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSystematicsLogin}
+                    className="inline-flex h-10 w-[320px] items-center justify-center gap-2 rounded-md border border-input bg-background px-4 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <SystematicsMark className="h-5 w-4" />
+                    Sign in with Systematics
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ) : (

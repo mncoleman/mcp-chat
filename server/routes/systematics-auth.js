@@ -15,6 +15,16 @@ function loadJose() {
 
 const PKCE_COOKIE = 'sys_pkce';
 const STATE_COOKIE = 'sys_state';
+const RETURN_COOKIE = 'sys_return';
+
+// A return_to is only honored if it is a same-origin relative path (starts with a
+// single "/", never "//" which would be protocol-relative). This is what lets the
+// MCP /connect flow resume on its own page after the redirect-based SIWS round-trip.
+function safeReturnTo(value) {
+  if (typeof value !== 'string') return null;
+  if (!value.startsWith('/') || value.startsWith('//')) return null;
+  return value;
+}
 
 function siwsConfig() {
   const issuerUrl = process.env.SYSTEMATICS_ISSUER_URL;
@@ -74,10 +84,14 @@ router.get('/login', (req, res) => {
   authorizeUrl.searchParams.set('code_challenge', challenge);
   authorizeUrl.searchParams.set('code_challenge_method', 'S256');
 
-  res.setHeader('Set-Cookie', [
+  const cookies = [
     `${PKCE_COOKIE}=${verifier}${SHORT_COOKIE}`,
     `${STATE_COOKIE}=${state}${SHORT_COOKIE}`,
-  ]);
+  ];
+  const returnTo = safeReturnTo(req.query.return_to);
+  if (returnTo) cookies.push(`${RETURN_COOKIE}=${encodeURIComponent(returnTo)}${SHORT_COOKIE}`);
+
+  res.setHeader('Set-Cookie', cookies);
   res.redirect(authorizeUrl.toString());
 });
 
@@ -189,14 +203,18 @@ router.get('/callback', async (req, res) => {
     };
 
     const completeUrl = new URL(`${clientOrigin()}/auth/systematics/complete`);
-    completeUrl.hash = new URLSearchParams({
+    const hashParams = {
       token: appToken,
       user: base64url(Buffer.from(JSON.stringify(handoffUser), 'utf8')),
-    }).toString();
+    };
+    const returnTo = safeReturnTo(parseCookie(cookieHeader, RETURN_COOKIE));
+    if (returnTo) hashParams.return_to = returnTo;
+    completeUrl.hash = new URLSearchParams(hashParams).toString();
 
     res.setHeader('Set-Cookie', [
       `${PKCE_COOKIE}=${CLEAR_COOKIE}`,
       `${STATE_COOKIE}=${CLEAR_COOKIE}`,
+      `${RETURN_COOKIE}=${CLEAR_COOKIE}`,
     ]);
     res.redirect(completeUrl.toString());
   } catch (err) {
