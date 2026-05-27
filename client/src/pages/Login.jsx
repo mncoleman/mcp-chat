@@ -6,7 +6,7 @@ import { useAuth } from '@/context/AuthContext.jsx'
 import api from '@/lib/axios'
 import { Radio } from 'lucide-react'
 
-function SystematicsMark({ className }) {
+export function SystematicsMark({ className }) {
   return (
     <svg viewBox="0 0 752 1024" className={className} xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <path

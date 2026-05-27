@@ -21,6 +21,7 @@ export default function AuthComplete() {
     const params = new URLSearchParams(hash)
     const token = params.get('token')
     const userRaw = params.get('user')
+    const returnTo = params.get('return_to')
 
     if (!token || !userRaw) {
       toast.error('Sign in failed: missing session data')
@@ -28,11 +29,14 @@ export default function AuthComplete() {
       return
     }
 
+    // Only follow a same-origin relative path (lets the MCP /connect flow resume).
+    const dest = returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/'
+
     try {
       const user = decodeBase64UrlJson(userRaw)
       setSession(token, user)
       window.location.hash = ''
-      navigate('/', { replace: true })
+      navigate(dest, { replace: true })
     } catch {
       toast.error('Sign in failed: could not decode session')
       navigate('/login', { replace: true })
