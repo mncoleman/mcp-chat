@@ -507,9 +507,11 @@ export default function ChatPage() {
                         <Monitor className="h-3.5 w-3.5 shrink-0 text-green-500" />
                       )}
                       <span className="truncate font-medium">{c.name}</span>
-                      <span className="ml-auto truncate text-xs text-muted-foreground">
-                        {c.type === 'member' ? 'member' : c.userName}
-                      </span>
+                      {(c.type === 'member' || c.userName) && (
+                        <span className="ml-auto truncate text-xs text-muted-foreground">
+                          {c.type === 'member' ? 'member' : c.userName}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
