@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, Children } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, Children, createContext, useContext, memo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -14,6 +14,23 @@ import { Send, Hash, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, 
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+// Per-message flag (set by the message list) telling the shared markdown
+// renderer whether this message's @mention chips should play the one-shot pulse.
+const MentionAnimateContext = createContext(false)
+
+// Memoized per-message markdown render. content/animate are stable per message
+// and components is a stable ref, so this skips re-parsing on unrelated ChatPage
+// re-renders (e.g. typing in the composer) -- and the chip pulse never re-fires.
+const MessageMarkdown = memo(function MessageMarkdown({ content, animate, components }) {
+  return (
+    <MentionAnimateContext.Provider value={animate}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {content}
+      </ReactMarkdown>
+    </MentionAnimateContext.Provider>
+  )
+})
 
 const markdownComponents = {
   p: ({ node, ...props }) => <p className="my-0.5 first:mt-0 last:mb-0 whitespace-pre-wrap" {...props} />,
@@ -105,8 +122,9 @@ export default function ChatPage() {
   // WebSocket for real-time
   const { messages: wsMessages, presence, sessionLabels: liveSessionLabels, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange })
 
-  // Combine history + live messages
-  const allMessages = [...history, ...wsMessages]
+  // Combine history + live messages (memoized so downstream memos that depend on
+  // it -- sessionLabelMap, the mention pipeline -- keep stable identity).
+  const allMessages = useMemo(() => [...history, ...wsMessages], [history, wsMessages])
 
   // Resolve each session's current name: active sessions + message history,
   // with live rename events (liveSessionLabels) taking precedence.
@@ -155,14 +173,23 @@ export default function ChatPage() {
     return [...names].sort((a, b) => b.length - a.length)
   }, [channelDetails, sessionLabelMap])
 
-  // Split a plain-text string into text + styled @mention chips. A span is only
-  // chipped when it exactly matches a known name at a word boundary (after the
-  // start or whitespace), so stray "@" and emails (foo@bar) stay plain text.
-  // Output is React strings/elements (auto-escaped) -- no HTML injection.
-  const splitMentions = useCallback((text) => {
-    if (typeof text !== 'string' || knownMentionNames.length === 0 || !text.includes('@')) {
+  // Latest names in a ref so the markdown renderers stay referentially stable.
+  // Rebuilding them each render would give ReactMarkdown a new components object,
+  // remounting the <p>/<li> subtrees and restarting the chip animation on every
+  // render (e.g. each keystroke in the composer).
+  const knownMentionNamesRef = useRef([])
+  knownMentionNamesRef.current = knownMentionNames
+
+  // Split a plain-text string into text + @mention chips. A span is only chipped
+  // when it exactly matches a known name at a word boundary (after start or
+  // whitespace), so stray "@" and emails (foo@bar) stay plain. `animate` adds the
+  // one-shot pulse class. Output is React strings/elements (auto-escaped).
+  const splitMentions = useCallback((text, animate) => {
+    const names = knownMentionNamesRef.current
+    if (typeof text !== 'string' || names.length === 0 || !text.includes('@')) {
       return text
     }
+    const chipClass = animate ? 'mention-chip mention-chip--animate' : 'mention-chip'
     const out = []
     let i = 0
     let last = 0
@@ -171,7 +198,7 @@ export default function ChatPage() {
       if (text[i] === '@' && (i === 0 || /\s/.test(text[i - 1]))) {
         const rest = text.slice(i + 1)
         const lowerRest = rest.toLowerCase()
-        const name = knownMentionNames.find((n) => {
+        const name = names.find((n) => {
           if (!lowerRest.startsWith(n.toLowerCase())) return false
           const after = rest[n.length]
           return after === undefined || !/\w/.test(after)
@@ -179,7 +206,7 @@ export default function ChatPage() {
         if (name) {
           if (i > last) out.push(text.slice(last, i))
           out.push(
-            <span key={`mc${key++}`} className="mention-chip mention-chip--animate">
+            <span key={`mc${key++}`} className={chipClass}>
               {text.slice(i, i + 1 + name.length)}
             </span>,
           )
@@ -193,24 +220,45 @@ export default function ChatPage() {
     if (out.length === 0) return text
     if (last < text.length) out.push(text.slice(last))
     return out
-  }, [knownMentionNames])
+  }, [])
 
   const applyMentions = useCallback(
-    (children) => Children.map(children, (child) => (typeof child === 'string' ? splitMentions(child) : child)),
+    (children, animate) =>
+      Children.map(children, (child) => (typeof child === 'string' ? splitMentions(child, animate) : child)),
     [splitMentions],
   )
 
-  // Message markdown renderer: same styling as the base, with @mention chips
-  // injected into the text of paragraphs and list items.
+  // Stable markdown renderer for messages: base styling + @mention chips. Each
+  // <p>/<li> reads the per-message animate flag from context (set by the list
+  // below) so only newly-arrived messages pulse. Stable identity = no remount.
   const messageMarkdownComponents = useMemo(() => ({
     ...markdownComponents,
-    p: ({ node, children, ...props }) => (
-      <p className="my-0.5 first:mt-0 last:mb-0 whitespace-pre-wrap" {...props}>{applyMentions(children)}</p>
-    ),
-    li: ({ node, children, ...props }) => (
-      <li className="my-0" {...props}>{applyMentions(children)}</li>
-    ),
+    p: ({ node, children, ...props }) => {
+      const animate = useContext(MentionAnimateContext)
+      return <p className="my-0.5 first:mt-0 last:mb-0 whitespace-pre-wrap" {...props}>{applyMentions(children, animate)}</p>
+    },
+    li: ({ node, children, ...props }) => {
+      const animate = useContext(MentionAnimateContext)
+      return <li className="my-0" {...props}>{applyMentions(children, animate)}</li>
+    },
   }), [applyMentions])
+
+  // Gate the one-shot pulse to messages that arrive AFTER the channel is opened,
+  // so the full history does not mass-flash on load. baselineIds = ids present at
+  // open; reset synchronously on channel change (before the first paint of it).
+  const baselineChannelRef = useRef(null)
+  const baselineIdsRef = useRef(null)
+  if (baselineChannelRef.current !== channelId) {
+    baselineChannelRef.current = channelId
+    baselineIdsRef.current = null
+  }
+  if (baselineIdsRef.current === null && history.length > 0) {
+    baselineIdsRef.current = new Set(history.map((m) => m.id))
+  }
+  const shouldAnimateMention = useCallback((msg) => {
+    if (msg.id == null) return true
+    return !(baselineIdsRef.current && baselineIdsRef.current.has(msg.id))
+  }, [])
 
   // Assign stable colors to different Claude sessions
   const SESSION_COLORS = [
@@ -487,6 +535,7 @@ export default function ChatPage() {
                   prev.session_id === msg.session_id &&
                   (new Date(msg.created_at) - new Date(prev.created_at)) < 120000
                 const showHeader = !isGrouped
+                const animateMentions = shouldAnimateMention(msg)
 
                 return (
                   <div key={msg.id || `ws-${i}`} className={cn(
@@ -527,9 +576,11 @@ export default function ChatPage() {
                             ? 'bg-primary text-primary-foreground'
                             : messageTypeStyles[msg.message_type] || 'bg-muted',
                       )}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={messageMarkdownComponents}>
-                          {msg.content}
-                        </ReactMarkdown>
+                        <MessageMarkdown
+                          content={msg.content}
+                          animate={animateMentions}
+                          components={messageMarkdownComponents}
+                        />
                       </div>
                       {msg.message_type && msg.message_type !== 'info' && !isOwn && !isFromClaude && (
                         <Badge variant="outline" className="mt-0.5 text-[10px]">{msg.message_type}</Badge>
