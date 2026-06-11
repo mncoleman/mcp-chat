@@ -73,7 +73,14 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
 
     ws.onclose = () => {
       setIsConnected(false)
-      reconnectTimeoutRef.current = setTimeout(connect, 3000)
+      // Only auto-reconnect if this socket is still the active one. After a
+      // channel switch (or unmount) wsRef points at the new socket (or null),
+      // so a superseded socket must NOT reconnect -- otherwise its stale
+      // `connect` closure rebinds the WS to the previous channel and outgoing
+      // messages silently land in the wrong channel.
+      if (wsRef.current === ws) {
+        reconnectTimeoutRef.current = setTimeout(connect, 3000)
+      }
     }
 
     ws.onerror = () => {
@@ -88,7 +95,14 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
     connect()
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current)
-      if (wsRef.current) wsRef.current.close()
+      if (wsRef.current) {
+        // Null the ref BEFORE close() so the socket's async onclose sees it is
+        // no longer current and skips the reconnect (prevents both the
+        // wrong-channel rebind on switch and a reconnect-after-unmount leak).
+        const ws = wsRef.current
+        wsRef.current = null
+        ws.close()
+      }
     }
   }, [connect])
 
