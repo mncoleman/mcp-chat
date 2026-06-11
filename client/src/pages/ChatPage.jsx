@@ -46,6 +46,9 @@ export default function ChatPage() {
   const { user } = useAuth()
   const [input, setInput] = useState('')
   const messagesEndRef = useRef(null)
+  const inputRef = useRef(null)
+  // @-mention autocomplete state: { at, query, matches, index } or null when closed
+  const [mention, setMention] = useState(null)
 
   // Channel instructions editor state
   const [showInstructions, setShowInstructions] = useState(false)
@@ -118,6 +121,21 @@ export default function ChatPage() {
     return { ...map, ...liveSessionLabels }
   }, [channelDetails, allMessages, liveSessionLabels])
 
+  // Distinct named sessions currently in the channel -- the @-mention candidates.
+  // Live rename events take precedence over the stored label.
+  const mentionCandidates = useMemo(() => {
+    const seen = new Set()
+    const list = []
+    channelDetails?.active_sessions?.forEach((s) => {
+      const name = (s.session_token && liveSessionLabels[s.session_token]) || s.label
+      if (name && !seen.has(name)) {
+        seen.add(name)
+        list.push({ name, sessionToken: s.session_token, userName: s.user_name })
+      }
+    })
+    return list
+  }, [channelDetails, liveSessionLabels])
+
   // Assign stable colors to different Claude sessions
   const SESSION_COLORS = [
     { bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-900', name: 'text-orange-700', icon: 'bg-orange-100', iconText: 'text-orange-700' },
@@ -149,6 +167,67 @@ export default function ChatPage() {
     if (!input.trim()) return
     sendMessage(input.trim())
     setInput('')
+    setMention(null)
+  }
+
+  // --- @-mention autocomplete ---
+  // Detect an active "@query" token ending at the caret and return matching sessions.
+  const detectMention = useCallback((value, caret) => {
+    const beforeCaret = value.slice(0, caret)
+    const at = beforeCaret.lastIndexOf('@')
+    if (at === -1) return null
+    // Only trigger when @ begins a token (start of input or preceded by whitespace).
+    if (at > 0 && !/\s/.test(value[at - 1])) return null
+    const query = beforeCaret.slice(at + 1)
+    if (query.includes('\n')) return null
+    const q = query.toLowerCase()
+    // Prefix match so the menu closes naturally once the text stops matching a name
+    // (e.g. after completing a mention and continuing the sentence).
+    const matches = mentionCandidates.filter((c) => c.name.toLowerCase().startsWith(q))
+    if (matches.length === 0) return null
+    return { at, query, matches, index: 0 }
+  }, [mentionCandidates])
+
+  const handleComposerChange = (e) => {
+    const value = e.target.value
+    setInput(value)
+    setMention(detectMention(value, e.target.selectionStart ?? value.length))
+  }
+
+  // Replace the "@query" token with "@<name> " and place the caret after it.
+  const insertMention = (candidate) => {
+    if (!mention) return
+    const caret = inputRef.current?.selectionStart ?? input.length
+    const before = input.slice(0, mention.at)
+    const after = input.slice(caret)
+    const inserted = `@${candidate.name} `
+    setInput(before + inserted + after)
+    setMention(null)
+    const newCaret = before.length + inserted.length
+    requestAnimationFrame(() => {
+      if (inputRef.current) {
+        inputRef.current.focus()
+        inputRef.current.setSelectionRange(newCaret, newCaret)
+      }
+    })
+  }
+
+  const handleComposerKeyDown = (e) => {
+    if (!mention) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setMention((m) => m && { ...m, index: (m.index + 1) % m.matches.length })
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setMention((m) => m && { ...m, index: (m.index - 1 + m.matches.length) % m.matches.length })
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      // Take the highlighted session instead of submitting the message
+      e.preventDefault()
+      insertMention(mention.matches[mention.index])
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setMention(null)
+    }
   }
 
   const openInstructionsEditor = () => {
@@ -385,18 +464,47 @@ export default function ChatPage() {
 
           {/* Input */}
           <div className="border-t p-4 shrink-0">
-            <form onSubmit={handleSend} className="flex gap-2 max-w-3xl mx-auto">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={`Message #${channelDetails?.name || ''}...`}
-                className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <Button type="submit" size="icon" disabled={!input.trim()}>
-                <Send className="h-4 w-4" />
-              </Button>
-            </form>
+            <div className="relative max-w-3xl mx-auto">
+              {mention && (
+                <div className="absolute bottom-full left-0 z-50 mb-1 w-72 overflow-hidden rounded-md border bg-popover shadow-md">
+                  <div className="border-b px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Sessions
+                  </div>
+                  {mention.matches.map((c, i) => (
+                    <button
+                      type="button"
+                      key={c.sessionToken || c.name}
+                      onMouseDown={(e) => { e.preventDefault(); insertMention(c) }}
+                      onMouseEnter={() => setMention((m) => (m ? { ...m, index: i } : m))}
+                      className={cn(
+                        'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm',
+                        i === mention.index ? 'bg-accent' : 'hover:bg-accent/50',
+                      )}
+                    >
+                      <Monitor className="h-3.5 w-3.5 shrink-0 text-green-500" />
+                      <span className="truncate font-medium">{c.name}</span>
+                      {c.userName && (
+                        <span className="ml-auto truncate text-xs text-muted-foreground">{c.userName}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <form onSubmit={handleSend} className="flex gap-2">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={handleComposerChange}
+                  onKeyDown={handleComposerKeyDown}
+                  placeholder={`Message #${channelDetails?.name || ''}...`}
+                  className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <Button type="submit" size="icon" disabled={!input.trim()}>
+                  <Send className="h-4 w-4" />
+                </Button>
+              </form>
+            </div>
           </div>
         </div>
       ) : (
