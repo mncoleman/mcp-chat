@@ -51,18 +51,15 @@ export default function SetupPage() {
 
   const agentPrompt = `Set up MCP Chat for my Claude Code environment. Run these commands:
 
-1. Install the MCP server globally:
-npm install -g mcp-chat-connect
+1. Register the MCP server with Claude Code (it runs via npx, so every session uses the latest published version -- no global install and no manual updates):
+claude mcp add -e MCP_CHAT_URL=${baseUrl} -s user mcp-chat -- npx -y mcp-chat-connect@latest
 
-2. Register it with Claude Code:
-claude mcp add -e MCP_CHAT_URL=${baseUrl} -s user mcp-chat $(which mcp-chat-connect)
-
-3. Add this shell alias to my ~/.zshrc (or ~/.bashrc):
+2. Add this shell alias to my ~/.zshrc (or ~/.bashrc):
 echo '' >> ~/.zshrc
 echo '# MCP Chat - Claude Code with channels' >> ~/.zshrc
 echo "alias claudechat='claude --dangerously-load-development-channels server:mcp-chat '" >> ~/.zshrc
 
-4. Verify the server is connected:
+3. Verify the server is connected:
 claude mcp get mcp-chat
 
 After setup, tell me to run "source ~/.zshrc" and then I can start a session with "claudechat".`
@@ -99,42 +96,32 @@ alias claudechat='claude --dangerously-load-development-channels server:mcp-chat
         <p className="text-sm text-muted-foreground">If you prefer to do it step by step.</p>
       </div>
 
-      {/* Step 1: Install */}
+      {/* Step 1: Register with Claude Code */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">1</Badge>
-          <h2 className="text-lg font-semibold">Install the MCP Server</h2>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Install the package globally so Claude Code can find it instantly (no download delay).
-        </p>
-        <CopyBlock label="Install globally" content="npm install -g mcp-chat-connect" />
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Package className="h-3 w-3" />
-          <span>Package: <a href="https://www.npmjs.com/package/mcp-chat-connect" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">mcp-chat-connect</a> on npm</span>
-        </div>
-      </div>
-
-      {/* Step 2: Register with Claude Code */}
-      <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">2</Badge>
           <h2 className="text-lg font-semibold">Register with Claude Code</h2>
         </div>
         <p className="text-sm text-muted-foreground">
-          Add the MCP server to your Claude Code user config so it's available in every session.
+          Add the MCP server to your Claude Code user config so it's available in every session. It launches via
+          <code className="bg-muted px-1 rounded mx-1">npx</code>, which always pulls the latest published version --
+          there is nothing to install globally and you never have to update it by hand.
         </p>
-        <CopyBlock label="Register MCP server" content={`claude mcp add -e MCP_CHAT_URL=${baseUrl} -s user mcp-chat $(which mcp-chat-connect)`} />
+        <CopyBlock label="Register MCP server" content={`claude mcp add -e MCP_CHAT_URL=${baseUrl} -s user mcp-chat -- npx -y mcp-chat-connect@latest`} />
         <p className="text-sm text-muted-foreground">
           Verify it's connected:
         </p>
         <CopyBlock label="Verify" content="claude mcp get mcp-chat" />
+        <div className="flex items-start gap-2 text-xs text-muted-foreground">
+          <Package className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>Package: <a href="https://www.npmjs.com/package/mcp-chat-connect" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">mcp-chat-connect</a> on npm. Prefer the fastest possible cold start? Run <code className="bg-muted px-1 rounded">npm install -g mcp-chat-connect</code> and register with <code className="bg-muted px-1 rounded">$(which mcp-chat-connect)</code> instead -- but then you must update it yourself with <code className="bg-muted px-1 rounded">npm install -g mcp-chat-connect</code>.</span>
+        </div>
       </div>
 
-      {/* Step 3: Shell alias */}
+      {/* Step 2: Shell alias */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
-          <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">3</Badge>
+          <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">2</Badge>
           <h2 className="text-lg font-semibold">Create a Shell Shortcut</h2>
         </div>
         <p className="text-sm text-muted-foreground">
@@ -146,10 +133,10 @@ alias claudechat='claude --dangerously-load-development-channels server:mcp-chat
         </p>
       </div>
 
-      {/* Step 4: Launch and connect */}
+      {/* Step 3: Launch and connect */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">
-          <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">4</Badge>
+          <Badge className="h-6 w-6 flex items-center justify-center rounded-full p-0">3</Badge>
           <h2 className="text-lg font-semibold">Launch and Connect</h2>
         </div>
         <p className="text-sm text-muted-foreground">
