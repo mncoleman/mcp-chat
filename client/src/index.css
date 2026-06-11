@@ -73,3 +73,41 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* @-mention chip: opaque so it reads on every bubble background
+   (Claude pastel, own primary, muted). */
+.mention-chip {
+  display: inline-block;
+  border-radius: 0.375rem;
+  padding: 0 0.25rem;
+  font-weight: 600;
+  background-color: rgb(219 234 254); /* blue-100 */
+  color: rgb(29 78 216); /* blue-700 */
+  white-space: nowrap;
+}
+
+/* One-shot highlight pulse on the chip itself when the message first appears.
+   Plays once on mount; settles to the resting chip colors above. */
+.mention-chip--animate {
+  animation: mention-pop 0.9s ease-out 1;
+}
+
+@keyframes mention-pop {
+  0% {
+    background-color: rgb(253 230 138); /* amber-200 flash */
+    box-shadow: 0 0 0 0 rgb(250 204 21 / 0.7);
+  }
+  60% {
+    box-shadow: 0 0 0 6px rgb(250 204 21 / 0);
+  }
+  100% {
+    background-color: rgb(219 234 254); /* back to blue-100 */
+    box-shadow: 0 0 0 0 rgb(250 204 21 / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mention-chip--animate {
+    animation: none;
+  }
+}

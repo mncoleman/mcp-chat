@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, Children } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -143,6 +143,74 @@ export default function ChatPage() {
     })
     return list
   }, [channelDetails, liveSessionLabels, user])
+
+  // All names that should render as @mention chips: every member (incl. self, so
+  // mentions of you are highlighted too) plus any session label seen, current or
+  // historical. Longest first so multi-word names win over shorter prefixes.
+  const knownMentionNames = useMemo(() => {
+    const names = new Set()
+    channelDetails?.members?.forEach((m) => m.name && names.add(m.name))
+    channelDetails?.active_sessions?.forEach((s) => s.label && names.add(s.label))
+    Object.values(sessionLabelMap).forEach((n) => n && names.add(n))
+    return [...names].sort((a, b) => b.length - a.length)
+  }, [channelDetails, sessionLabelMap])
+
+  // Split a plain-text string into text + styled @mention chips. A span is only
+  // chipped when it exactly matches a known name at a word boundary (after the
+  // start or whitespace), so stray "@" and emails (foo@bar) stay plain text.
+  // Output is React strings/elements (auto-escaped) -- no HTML injection.
+  const splitMentions = useCallback((text) => {
+    if (typeof text !== 'string' || knownMentionNames.length === 0 || !text.includes('@')) {
+      return text
+    }
+    const out = []
+    let i = 0
+    let last = 0
+    let key = 0
+    while (i < text.length) {
+      if (text[i] === '@' && (i === 0 || /\s/.test(text[i - 1]))) {
+        const rest = text.slice(i + 1)
+        const lowerRest = rest.toLowerCase()
+        const name = knownMentionNames.find((n) => {
+          if (!lowerRest.startsWith(n.toLowerCase())) return false
+          const after = rest[n.length]
+          return after === undefined || !/\w/.test(after)
+        })
+        if (name) {
+          if (i > last) out.push(text.slice(last, i))
+          out.push(
+            <span key={`mc${key++}`} className="mention-chip mention-chip--animate">
+              {text.slice(i, i + 1 + name.length)}
+            </span>,
+          )
+          i += 1 + name.length
+          last = i
+          continue
+        }
+      }
+      i += 1
+    }
+    if (out.length === 0) return text
+    if (last < text.length) out.push(text.slice(last))
+    return out
+  }, [knownMentionNames])
+
+  const applyMentions = useCallback(
+    (children) => Children.map(children, (child) => (typeof child === 'string' ? splitMentions(child) : child)),
+    [splitMentions],
+  )
+
+  // Message markdown renderer: same styling as the base, with @mention chips
+  // injected into the text of paragraphs and list items.
+  const messageMarkdownComponents = useMemo(() => ({
+    ...markdownComponents,
+    p: ({ node, children, ...props }) => (
+      <p className="my-0.5 first:mt-0 last:mb-0 whitespace-pre-wrap" {...props}>{applyMentions(children)}</p>
+    ),
+    li: ({ node, children, ...props }) => (
+      <li className="my-0" {...props}>{applyMentions(children)}</li>
+    ),
+  }), [applyMentions])
 
   // Assign stable colors to different Claude sessions
   const SESSION_COLORS = [
@@ -459,7 +527,7 @@ export default function ChatPage() {
                             ? 'bg-primary text-primary-foreground'
                             : messageTypeStyles[msg.message_type] || 'bg-muted',
                       )}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={messageMarkdownComponents}>
                           {msg.content}
                         </ReactMarkdown>
                       </div>
