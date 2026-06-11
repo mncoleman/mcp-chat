@@ -121,20 +121,28 @@ export default function ChatPage() {
     return { ...map, ...liveSessionLabels }
   }, [channelDetails, allMessages, liveSessionLabels])
 
-  // Distinct named sessions currently in the channel -- the @-mention candidates.
-  // Live rename events take precedence over the stored label.
+  // @-mention candidates: human members first, then connected sessions.
+  // Live rename events take precedence over a session's stored label.
   const mentionCandidates = useMemo(() => {
     const seen = new Set()
     const list = []
+    const add = (name, entry) => {
+      if (!name) return
+      const key = `${entry.type}:${name.toLowerCase()}`
+      if (seen.has(key)) return
+      seen.add(key)
+      list.push({ name, ...entry })
+    }
+    channelDetails?.members?.forEach((m) => {
+      if (m.id === user?.id) return // no point mentioning yourself
+      add(m.name, { type: 'member', avatarUrl: m.avatar_url })
+    })
     channelDetails?.active_sessions?.forEach((s) => {
       const name = (s.session_token && liveSessionLabels[s.session_token]) || s.label
-      if (name && !seen.has(name)) {
-        seen.add(name)
-        list.push({ name, sessionToken: s.session_token, userName: s.user_name })
-      }
+      add(name, { type: 'session', sessionToken: s.session_token, userName: s.user_name })
     })
     return list
-  }, [channelDetails, liveSessionLabels])
+  }, [channelDetails, liveSessionLabels, user])
 
   // Assign stable colors to different Claude sessions
   const SESSION_COLORS = [
@@ -198,6 +206,9 @@ export default function ChatPage() {
   const insertMention = (candidate) => {
     if (!mention) return
     const caret = inputRef.current?.selectionStart ?? input.length
+    // If the caret moved before the @ since the menu opened, abort rather than
+    // splice with a stale anchor (which could duplicate or drop text).
+    if (caret < mention.at) { setMention(null); return }
     const before = input.slice(0, mention.at)
     const after = input.slice(caret)
     const inserted = `@${candidate.name} `
@@ -214,6 +225,7 @@ export default function ChatPage() {
 
   const handleComposerKeyDown = (e) => {
     if (!mention) return
+    if (e.nativeEvent?.isComposing) return // don't hijack keys mid IME composition
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setMention((m) => m && { ...m, index: (m.index + 1) % m.matches.length })
@@ -466,14 +478,19 @@ export default function ChatPage() {
           <div className="border-t p-4 shrink-0">
             <div className="relative max-w-3xl mx-auto">
               {mention && (
-                <div className="absolute bottom-full left-0 z-50 mb-1 w-72 overflow-hidden rounded-md border bg-popover shadow-md">
+                <div
+                  role="listbox"
+                  className="absolute bottom-full left-0 z-50 mb-1 w-72 overflow-hidden rounded-md border bg-popover shadow-md"
+                >
                   <div className="border-b px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Sessions
+                    Mention
                   </div>
                   {mention.matches.map((c, i) => (
                     <button
                       type="button"
-                      key={c.sessionToken || c.name}
+                      role="option"
+                      aria-selected={i === mention.index}
+                      key={`${c.type}:${c.sessionToken || c.name}`}
                       onMouseDown={(e) => { e.preventDefault(); insertMention(c) }}
                       onMouseEnter={() => setMention((m) => (m ? { ...m, index: i } : m))}
                       className={cn(
@@ -481,11 +498,18 @@ export default function ChatPage() {
                         i === mention.index ? 'bg-accent' : 'hover:bg-accent/50',
                       )}
                     >
-                      <Monitor className="h-3.5 w-3.5 shrink-0 text-green-500" />
-                      <span className="truncate font-medium">{c.name}</span>
-                      {c.userName && (
-                        <span className="ml-auto truncate text-xs text-muted-foreground">{c.userName}</span>
+                      {c.type === 'member' ? (
+                        <Avatar className="h-4 w-4 shrink-0">
+                          <AvatarImage src={c.avatarUrl} />
+                          <AvatarFallback className="text-[9px]">{c.name?.[0]}</AvatarFallback>
+                        </Avatar>
+                      ) : (
+                        <Monitor className="h-3.5 w-3.5 shrink-0 text-green-500" />
                       )}
+                      <span className="truncate font-medium">{c.name}</span>
+                      <span className="ml-auto truncate text-xs text-muted-foreground">
+                        {c.type === 'member' ? 'member' : c.userName}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -497,6 +521,7 @@ export default function ChatPage() {
                   value={input}
                   onChange={handleComposerChange}
                   onKeyDown={handleComposerKeyDown}
+                  onBlur={() => setMention(null)}
                   placeholder={`Message #${channelDetails?.name || ''}...`}
                   className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
