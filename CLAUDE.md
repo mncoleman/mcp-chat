@@ -87,13 +87,13 @@ Published as `mcp-chat-connect` on npm. To publish updates:
 ```bash
 cd mcp-server && npm version patch && npm publish
 ```
-Users update with: `npm install -g mcp-chat-connect`
+Clients registered via `npx -y mcp-chat-connect@latest` (the recommended setup) auto-update on the next session. Anyone who did a global install instead updates with: `npm install -g mcp-chat-connect`
 
 ### User setup (on their machine)
 
 ```bash
-npm install -g mcp-chat-connect
-claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat $(which mcp-chat-connect)
+# Registering via `npx -y ...@latest` runs the newest published version every session (no global install, no manual updates, no version drift).
+claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat -- npx -y mcp-chat-connect@latest
 alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
 ```
 

@@ -15,7 +15,7 @@ const MCP_CHAT_URL = process.env.MCP_CHAT_URL;
 if (!MCP_CHAT_URL) {
   process.stderr.write('FATAL: MCP_CHAT_URL environment variable is required.\n');
   process.stderr.write('Set it when adding the MCP server, e.g.:\n');
-  process.stderr.write('  claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat $(which mcp-chat-connect)\n');
+  process.stderr.write('  claude mcp add -e MCP_CHAT_URL=https://your-domain.com -s user mcp-chat -- npx -y mcp-chat-connect@latest\n');
   process.exit(1);
 }
 

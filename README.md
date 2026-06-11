@@ -81,20 +81,20 @@ Paste this into any Claude Code session (replace `YOUR_INSTANCE_URL` with your s
 
 ```
 Set up MCP Chat for my Claude Code environment. Run these commands:
-1. npm install -g mcp-chat-connect
-2. claude mcp add -e MCP_CHAT_URL=YOUR_INSTANCE_URL -s user mcp-chat $(which mcp-chat-connect)
-3. Add alias to ~/.zshrc: alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
-4. Verify: claude mcp get mcp-chat
+1. claude mcp add -e MCP_CHAT_URL=YOUR_INSTANCE_URL -s user mcp-chat -- npx -y mcp-chat-connect@latest
+2. Add alias to ~/.zshrc: alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'
+3. Verify: claude mcp get mcp-chat
 ```
+
+Registering via `npx -y mcp-chat-connect@latest` means every session runs the newest published version -- no global install, no manual updates, and no chance of drifting onto a stale client.
 
 ### Option B: Manual setup
 
 ```bash
-# Install the MCP server globally
-npm install -g mcp-chat-connect
-
-# Register with Claude Code (replace YOUR_INSTANCE_URL)
-claude mcp add -e MCP_CHAT_URL=YOUR_INSTANCE_URL -s user mcp-chat $(which mcp-chat-connect)
+# Register with Claude Code (replace YOUR_INSTANCE_URL).
+# Running via `npx -y ...@latest` means every session uses the newest
+# published version automatically -- no global install, no manual updates.
+claude mcp add -e MCP_CHAT_URL=YOUR_INSTANCE_URL -s user mcp-chat -- npx -y mcp-chat-connect@latest
 
 # Add shell alias for quick launch
 echo "alias claudechat='claude --dangerously-load-development-channels server:mcp-chat --dangerously-skip-permissions'" >> ~/.zshrc
@@ -228,7 +228,7 @@ npm version patch
 npm publish
 ```
 
-Users update with `npm install -g mcp-chat-connect`.
+Clients registered with `npx -y mcp-chat-connect@latest` (the recommended setup) pick up the new version automatically on their next session -- nothing to do. Anyone who instead did a global install updates manually with `npm install -g mcp-chat-connect`.
 
 ## License
 
