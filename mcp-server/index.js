@@ -103,6 +103,13 @@ function pushChannelMessage(source, content, meta) {
   });
 }
 
+// Heads-up appended to connect/join text when a channel is mentions-only, so the
+// session understands silence does not mean nobody is talking. Empty for broadcast.
+function deliveryModeNotice(label) {
+  const name = label || 'your session name';
+  return `\n\nThis channel is in mentions-only mode: you will only be pushed messages that @mention your session name ("${name}"). Other messages won't interrupt you -- use mcp_chat_read to catch up on the full channel.`;
+}
+
 // ─── WebSocket listener for real-time channel messages ───────────────────────
 
 let wsConnection = null;
@@ -140,10 +147,17 @@ function connectWebSocket() {
           ? `${msg.user_name?.split(' ')[0]}'s Claude${msg.session_label ? ` (${msg.session_label})` : ''}`
           : msg.user_name || 'unknown';
 
-        pushChannelMessage('mcp-chat', msg.content, {
+        // In mentions-only channels, the server only delivers messages that @mention
+        // this session and tags them mentioned:true -- flag it as a direct ping.
+        const content = data.mentioned
+          ? `[You were @mentioned] ${msg.content}`
+          : msg.content;
+
+        pushChannelMessage('mcp-chat', content, {
           channel: sessionState.channelName,
           user: senderLabel,
           message_type: msg.message_type || 'info',
+          mentioned: data.mentioned === true,
           timestamp: msg.created_at || new Date().toISOString(),
         });
       } else if (data.type === 'session_renamed') {
@@ -166,6 +180,18 @@ function connectWebSocket() {
         pushChannelMessage('mcp-chat', body, {
           channel: sessionState.channelName,
           event: 'channel_instructions_updated',
+        });
+      } else if (data.type === 'channel_mode_updated') {
+        const mode = data.delivery_mode === 'mention' ? 'mention' : 'broadcast';
+        if (mode === sessionState.deliveryMode) return; // skip echo of our own change
+        sessionState.deliveryMode = mode;
+        const body = mode === 'mention'
+          ? `Delivery for #${sessionState.channelName} was set to mentions-only${data.updated_by ? ` by ${data.updated_by}` : ''}. From now on you will only be pushed messages that @mention your session name ("${sessionState.sessionLabel || 'your session'}"). Use mcp_chat_read to catch up on anything else.`
+          : `Delivery for #${sessionState.channelName} was set to broadcast${data.updated_by ? ` by ${data.updated_by}` : ''}. You will now be pushed every message in the channel.`;
+        pushChannelMessage('mcp-chat', body, {
+          channel: sessionState.channelName,
+          event: 'channel_mode_updated',
+          delivery_mode: mode,
         });
       } else if (data.type === 'presence') {
         // Only push presence for Claude Code sessions (have session_token), not browser refreshes
@@ -282,6 +308,7 @@ let sessionState = {
   sessionToken: null,
   sessionLabel: null,
   sessionInstructions: null,
+  deliveryMode: 'broadcast',
   connected: false,
 };
 
@@ -315,6 +342,7 @@ if (envToken && envChannel) {
     sessionToken,
     sessionLabel: null,
     sessionInstructions: null,
+    deliveryMode: 'broadcast',
     connected: true,
   };
 
@@ -326,6 +354,7 @@ if (envToken && envChannel) {
   }, envToken).then(result => {
     sessionState.sessionLabel = result.label || 'Session';
     sessionState.sessionInstructions = result.instructions || null;
+    sessionState.deliveryMode = result.delivery_mode || 'broadcast';
     if (result.channel_name) sessionState.channelName = result.channel_name;
     process.stderr.write(`[mcp-chat] Auto-connected to #${sessionState.channelName} as ${userName} (${sessionState.sessionLabel})\n`);
   }).catch(() => {
@@ -473,6 +502,17 @@ function getTools() {
         required: ['instructions'],
       },
     },
+    {
+      name: 'mcp_chat_set_mode',
+      description: "Set the channel's delivery mode (any member). 'broadcast' pushes every message to every connected session; 'mention' pushes only to sessions that are @<session-name>-mentioned (others can still mcp_chat_read). Browsers always see every message either way.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['broadcast', 'mention'], description: "'broadcast' or 'mention'" },
+        },
+        required: ['mode'],
+      },
+    },
   ];
 }
 
@@ -502,6 +542,7 @@ async function handleToolCall(name, args) {
           sessionToken,
           sessionLabel: null,
           sessionInstructions: null,
+          deliveryMode: 'broadcast',
           connected: true,
         };
         saveConfig({ token: result.token, userName: result.userName, userId });
@@ -517,6 +558,7 @@ async function handleToolCall(name, args) {
           sessionLabel = regResult.label || sessionLabel;
           sessionState.sessionLabel = sessionLabel;
           sessionState.sessionInstructions = regResult.instructions || null;
+          sessionState.deliveryMode = regResult.delivery_mode || 'broadcast';
         } catch {}
 
         // Start WebSocket listener for real-time push
@@ -525,6 +567,9 @@ async function handleToolCall(name, args) {
         // Check for package updates
         const updateNotice = await checkForUpdate();
         let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Your session is named "${sessionLabel}" -- this name appears on every message you send. Use mcp_chat_set_name to change it. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
+        if (sessionState.deliveryMode === 'mention') {
+          responseText += deliveryModeNotice(sessionLabel);
+        }
         if (sessionState.sessionInstructions) {
           responseText += `\n\nChannel instructions for #${result.channelName} (apply these while in this channel):\n${sessionState.sessionInstructions}`;
         }
@@ -564,6 +609,7 @@ async function handleToolCall(name, args) {
           sessionToken,
           sessionLabel: null,
           sessionInstructions: null,
+          deliveryMode: channel.delivery_mode || 'broadcast',
           connected: true,
         };
 
@@ -578,10 +624,14 @@ async function handleToolCall(name, args) {
           sessionLabel = regResult.label || sessionLabel;
           sessionState.sessionLabel = sessionLabel;
           sessionState.sessionInstructions = regResult.instructions || null;
+          sessionState.deliveryMode = regResult.delivery_mode || 'broadcast';
         } catch {}
 
         connectWebSocket();
         let joinText = `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Your session is named "${sessionLabel}"; use mcp_chat_set_name to change it. Live messages are now being pushed.`;
+        if (sessionState.deliveryMode === 'mention') {
+          joinText += deliveryModeNotice(sessionLabel);
+        }
         if (sessionState.sessionInstructions) {
           joinText += `\n\nChannel instructions for #${channel.name} (apply these while in this channel):\n${sessionState.sessionInstructions}`;
         }
@@ -663,7 +713,10 @@ async function handleToolCall(name, args) {
         return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_connect or mcp_chat_join to pick a channel.' : 'Not connected. Run mcp_chat_connect to authenticate and select a channel.' }] };
       }
       const wsStatus = wsConnection?.readyState === 1 ? 'live (receiving messages)' : 'reconnecting...';
-      let statusText = `Connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'})\nWebSocket: ${wsStatus}`;
+      const modeText = sessionState.deliveryMode === 'mention'
+        ? `mentions-only (you are pushed only messages that @mention "${sessionState.sessionLabel || 'your session'}"; use mcp_chat_read for the rest)`
+        : 'broadcast (you are pushed every message)';
+      let statusText = `Connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'})\nWebSocket: ${wsStatus}\nDelivery: ${modeText}`;
       if (sessionState.sessionInstructions) {
         statusText += `\n\nChannel instructions:\n${sessionState.sessionInstructions}`;
       }
@@ -758,6 +811,24 @@ async function handleToolCall(name, args) {
       return { content: [{ type: 'text', text: result.instructions
         ? `Channel instructions for #${sessionState.channelName} updated. All connected sessions will see them.`
         : `Channel instructions for #${sessionState.channelName} cleared.` }] };
+    }
+
+    case 'mcp_chat_set_mode': {
+      if (!sessionState.connected) {
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+      }
+      if (args.mode !== 'broadcast' && args.mode !== 'mention') {
+        return { content: [{ type: 'text', text: "mode must be 'broadcast' or 'mention'." }], isError: true };
+      }
+      const result = await apiCall('set_channel_mode', {
+        channel_id: sessionState.channelId,
+        mode: args.mode,
+      }, sessionState.token);
+      if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      sessionState.deliveryMode = result.delivery_mode || args.mode;
+      return { content: [{ type: 'text', text: sessionState.deliveryMode === 'mention'
+        ? `#${sessionState.channelName} is now mentions-only: sessions are pushed only messages that @mention them; others can still mcp_chat_read. Browsers still see everything.`
+        : `#${sessionState.channelName} is now broadcast: every message is pushed to every connected session.` }] };
     }
 
     default:

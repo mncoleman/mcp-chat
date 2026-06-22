@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS channels (
   name TEXT NOT NULL,
   description TEXT,
   instructions TEXT,
+  -- Controls instant (push) delivery to Claude sessions:
+  --   'broadcast' -- every connected session is pushed every message (default)
+  --   'mention'   -- only @<session-label>-mentioned sessions are pushed; others
+  --                  can still mcp_chat_read. Browsers always receive everything.
+  delivery_mode TEXT NOT NULL DEFAULT 'broadcast' CHECK (delivery_mode IN ('broadcast', 'mention')),
   created_by INTEGER REFERENCES users(id),
   is_archived BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
