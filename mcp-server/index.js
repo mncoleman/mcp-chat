@@ -153,11 +153,14 @@ function connectWebSocket() {
           ? `[You were @mentioned] ${msg.content}`
           : msg.content;
 
+        // NOTE: channel notification `meta` is Record<string,string> -- every value
+        // MUST be a string, or Claude Code silently drops the whole notification.
+        // Only attach `mentioned` (as a string) on actual mentions.
         pushChannelMessage('mcp-chat', content, {
           channel: sessionState.channelName,
           user: senderLabel,
           message_type: msg.message_type || 'info',
-          mentioned: data.mentioned === true,
+          ...(data.mentioned ? { mentioned: 'true' } : {}),
           timestamp: msg.created_at || new Date().toISOString(),
         });
       } else if (data.type === 'session_renamed') {
