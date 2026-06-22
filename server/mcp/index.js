@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const pool = require('../db/pool');
 const { JWT_SECRET } = require('../middleware/auth');
-const { broadcastToChannel } = require('../ws/index');
+const { broadcastToChannel, deliverMessage, resolveMentions } = require('../ws/index');
 
 /**
  * MCP Server endpoint using SSE for server-to-client push
@@ -161,18 +161,26 @@ function setupMcpRoutes(app) {
             message.session_label = labelResult.rows[0]?.label || null;
           }
 
-          // Broadcast to WebSocket clients (browser UI)
-          broadcastToChannel(String(channel_id), { type: 'new_message', message });
+          // Deliver to WebSocket clients (browsers + Claude sessions), honoring the
+          // channel's delivery mode (broadcast to all, or only @-mentioned sessions).
+          await deliverMessage(channel_id, message);
 
-          // Push to SSE clients (other Claude Code sessions)
-          pushToChannel(channel_id, session_token, { type: 'new_message', message });
+          // Legacy SSE fan-out to any SSE-connected sessions. The live npm client
+          // receives over WebSocket, but keep SSE consistent: in mention mode only
+          // push to @-mentioned sessions; otherwise to all (excluding the sender).
+          let sseAllowed = null;
+          const channelMode = await pool.query('SELECT delivery_mode FROM channels WHERE id = $1', [channel_id]);
+          if (channelMode.rows[0]?.delivery_mode === 'mention') {
+            sseAllowed = await resolveMentions(channel_id, content);
+          }
+          pushToChannel(channel_id, session_token, { type: 'new_message', message }, sseAllowed);
 
           return res.json({ success: true, message_id: message.id });
         }
 
         case 'list_channels': {
           const result = await pool.query(
-            `SELECT c.id, c.name, c.description, c.instructions
+            `SELECT c.id, c.name, c.description, c.instructions, c.delivery_mode
              FROM channels c
              JOIN channel_members cm ON cm.channel_id = c.id AND cm.user_id = $1
              WHERE c.is_archived = false`,
@@ -276,9 +284,9 @@ function setupMcpRoutes(app) {
             label,
           });
 
-          // Return channel name + shared instructions so the session learns its context
+          // Return channel name + shared instructions + delivery mode so the session learns its context
           const channelInfo = await pool.query(
-            'SELECT name, instructions FROM channels WHERE id = $1',
+            'SELECT name, instructions, delivery_mode FROM channels WHERE id = $1',
             [channel_id]
           );
 
@@ -288,6 +296,7 @@ function setupMcpRoutes(app) {
             session_token,
             channel_name: channelInfo.rows[0]?.name || null,
             instructions: channelInfo.rows[0]?.instructions || null,
+            delivery_mode: channelInfo.rows[0]?.delivery_mode || 'broadcast',
           });
         }
 
@@ -354,6 +363,38 @@ function setupMcpRoutes(app) {
           });
 
           return res.json({ success: true, instructions: result.rows[0].instructions });
+        }
+
+        case 'set_channel_mode': {
+          const { channel_id, mode } = args;
+          if (!channel_id) return res.json({ error: 'channel_id is required' });
+          if (mode !== 'broadcast' && mode !== 'mention') {
+            return res.json({ error: "mode must be 'broadcast' or 'mention'" });
+          }
+
+          // Verify membership (any member can change the mode)
+          const modeMemberCheck = await pool.query(
+            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+            [channel_id, user.id]
+          );
+          if (modeMemberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member of this channel' });
+          }
+
+          const result = await pool.query(
+            'UPDATE channels SET delivery_mode = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, delivery_mode',
+            [mode, channel_id]
+          );
+          if (result.rows.length === 0) return res.json({ error: 'Channel not found' });
+
+          broadcastToChannel(String(channel_id), {
+            type: 'channel_mode_updated',
+            channel_id: Number(channel_id),
+            delivery_mode: result.rows[0].delivery_mode,
+            updated_by: user.name,
+          });
+
+          return res.json({ success: true, delivery_mode: result.rows[0].delivery_mode });
         }
 
         case 'create_channel': {
@@ -569,20 +610,35 @@ function setupMcpRoutes(app) {
             required: ['channel_id'],
           },
         },
+        {
+          name: 'set_channel_mode',
+          description: "Set a channel's delivery mode (any member). 'broadcast' pushes every message to every connected session; 'mention' pushes only to @<session-label>-mentioned sessions (others can still read history).",
+          inputSchema: {
+            type: 'object',
+            properties: {
+              channel_id: { type: 'number', description: 'Channel ID' },
+              mode: { type: 'string', enum: ['broadcast', 'mention'], description: "Delivery mode" },
+            },
+            required: ['channel_id', 'mode'],
+          },
+        },
       ],
     });
   });
 }
 
 /**
- * Push a message to all SSE-connected Claude Code sessions in a channel
- * (excluding the sender's session)
+ * Push a message to SSE-connected Claude Code sessions in a channel
+ * (excluding the sender's session). When allowedTokens is a Set, only sessions
+ * whose token is in it receive the push (used for mention-only delivery mode);
+ * pass null to push to every session in the channel.
  */
-function pushToChannel(channelId, excludeSessionToken, data) {
+function pushToChannel(channelId, excludeSessionToken, data, allowedTokens = null) {
   for (const [token, client] of sseClients) {
-    if (String(client.channelId) === String(channelId) && token !== excludeSessionToken) {
-      client.res.write(`data: ${JSON.stringify(data)}\n\n`);
-    }
+    if (String(client.channelId) !== String(channelId)) continue;
+    if (token === excludeSessionToken) continue;
+    if (allowedTokens && !allowedTokens.has(token)) continue;
+    client.res.write(`data: ${JSON.stringify(data)}\n\n`);
   }
 }
 

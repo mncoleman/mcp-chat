@@ -117,7 +117,7 @@ function setupWebSocket(server) {
           );
           const message = result.rows[0];
           message.user_name = user.name;
-          broadcastToChannel(channelId, { type: 'new_message', message });
+          await deliverMessage(channelId, message);
         } else if (data.type === 'ping') {
           ws.send(JSON.stringify({ type: 'pong' }));
         }
@@ -187,6 +187,98 @@ function broadcastToChannel(channelId, data) {
   }
 }
 
+// Resolve which session tokens are @-mentioned in a message's content.
+// Mirrors the client's mention matching (client/src/pages/ChatPage.jsx splitMentions):
+// an "@" that begins a token (start of string or preceded by whitespace), followed by
+// a known session label (case-insensitive, longest label first so multi-word labels
+// win over shorter prefixes), where the character after the label is not a word char.
+// Returns a Set of matched session_tokens. Draws from ALL sessions ever in the channel
+// (current + historical) so a mention resolves even for a session not currently online.
+// On any DB error it returns an empty set -- the safe failure mode (browsers still get
+// the message; no session is pushed in error rather than over-delivering).
+async function resolveMentions(channelId, content) {
+  const tokens = new Set();
+  if (typeof content !== 'string' || !content.includes('@')) return tokens;
+
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      'SELECT session_token, label FROM sessions WHERE channel_id = $1',
+      [channelId]
+    ));
+  } catch (err) {
+    console.error('[ws] resolveMentions query failed:', err.message);
+    return tokens;
+  }
+  if (!rows || rows.length === 0) return tokens;
+
+  // label (lowercased) -> [tokens]; candidate names sorted longest-first.
+  const labelToTokens = new Map();
+  for (const r of rows) {
+    if (!r.label) continue;
+    const key = r.label.toLowerCase();
+    if (!labelToTokens.has(key)) labelToTokens.set(key, []);
+    labelToTokens.get(key).push(r.session_token);
+  }
+  const names = [...labelToTokens.keys()].sort((a, b) => b.length - a.length);
+  if (names.length === 0) return tokens;
+
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] !== '@') continue;
+    if (i > 0 && !/\s/.test(content[i - 1])) continue; // must begin a token
+    const rest = content.slice(i + 1);
+    const lowerRest = rest.toLowerCase();
+    const name = names.find((n) => {
+      if (!lowerRest.startsWith(n)) return false;
+      const after = rest[n.length];
+      return after === undefined || !/\w/.test(after);
+    });
+    if (name) {
+      for (const t of labelToTokens.get(name)) tokens.add(t);
+      i += name.length; // skip past the matched label
+    }
+  }
+  return tokens;
+}
+
+// Deliver a new chat message to a channel, honoring its delivery mode. This is the
+// single choke point all three send paths (browser WS, REST, MCP) route through.
+//   'broadcast' -- every client receives it (unchanged legacy behavior).
+//   'mention'   -- browser clients (no session token) always receive it; Claude
+//                  sessions receive it only when their session is @-mentioned (that
+//                  frame is tagged mentioned:true so the npm client can flag a direct
+//                  ping). Un-mentioned sessions get nothing pushed and rely on mcp_chat_read.
+async function deliverMessage(channelId, message) {
+  const clients = channelClients.get(String(channelId));
+  if (!clients || clients.size === 0) return;
+
+  let mode = 'broadcast';
+  try {
+    const { rows } = await pool.query('SELECT delivery_mode FROM channels WHERE id = $1', [channelId]);
+    if (rows[0]?.delivery_mode === 'mention') mode = 'mention';
+  } catch (err) {
+    console.error('[ws] deliverMessage mode lookup failed, defaulting to broadcast:', err.message);
+  }
+
+  if (mode === 'broadcast') {
+    broadcastToChannel(channelId, { type: 'new_message', message });
+    return;
+  }
+
+  const mentioned = await resolveMentions(channelId, message.content);
+  const allPayload = JSON.stringify({ type: 'new_message', message });
+  const mentionedPayload = JSON.stringify({ type: 'new_message', message, mentioned: true });
+  for (const client of clients) {
+    if (client.ws.readyState !== 1) continue;
+    if (!client.sessionToken) {
+      client.ws.send(allPayload);                 // browser -- always live
+    } else if (mentioned.has(client.sessionToken)) {
+      client.ws.send(mentionedPayload);           // mentioned session -- direct ping
+    }
+    // un-mentioned sessions: intentionally skipped (they can mcp_chat_read)
+  }
+}
+
 function getPresence() {
   const presence = {};
   for (const [userId, connections] of userConnections) {
@@ -205,4 +297,4 @@ function getPresence() {
   return presence;
 }
 
-module.exports = { setupWebSocket, broadcastToChannel, getPresence };
+module.exports = { setupWebSocket, broadcastToChannel, deliverMessage, resolveMentions, getPresence };

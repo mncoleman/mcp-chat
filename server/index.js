@@ -6,7 +6,7 @@ const morgan = require('morgan');
 const http = require('http');
 
 const { requireAuth } = require('./middleware/auth');
-const { setupWebSocket, broadcastToChannel } = require('./ws/index');
+const { setupWebSocket } = require('./ws/index');
 const { setupMcpRoutes } = require('./mcp/index');
 const pool = require('./db/pool');
 
@@ -26,6 +26,12 @@ pool.query(`
 
 // Channel-wide instructions (shared system prompt seen by all connected sessions)
 pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS instructions TEXT`)
+  .catch(err => console.error('Migration error:', err.message));
+
+// Per-channel delivery mode: 'broadcast' (push every message to every session) or
+// 'mention' (only push to @<session-label>-mentioned sessions). Browsers always
+// receive everything; mention-gating affects Claude-session push only.
+pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS delivery_mode TEXT NOT NULL DEFAULT 'broadcast'`)
   .catch(err => console.error('Migration error:', err.message));
 
 const app = express();
@@ -52,9 +58,6 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: true, limit: '50kb' }));
 
-// Make broadcast available to route handlers
-app.locals.broadcast = (channelId, data) => broadcastToChannel(String(channelId), data);
-
 // Serve static client in production (before auth middleware)
 const path = require('path');
 const fs = require('fs');
@@ -74,7 +77,7 @@ if (fs.existsSync(clientDist)) {
 }
 
 // Public: latest mcp-chat-connect version (used by npm package for update checks)
-const MCP_CONNECT_LATEST = process.env.MCP_CONNECT_LATEST || '1.4.0';
+const MCP_CONNECT_LATEST = process.env.MCP_CONNECT_LATEST || '1.5.0';
 app.get('/api/version', (req, res) => {
   res.json({ latest: MCP_CONNECT_LATEST });
 });

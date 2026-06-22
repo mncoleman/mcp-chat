@@ -187,6 +187,54 @@ router.put('/:id/instructions', async (req, res) => {
 });
 
 /**
+ * PUT /api/channels/:id/mode - Set channel delivery mode (any member)
+ * 'broadcast' pushes every message to every connected session; 'mention' pushes
+ * only to @<session-label>-mentioned sessions (others can still read history).
+ */
+router.put('/:id/mode', async (req, res) => {
+  try {
+    const { delivery_mode } = req.body;
+    if (delivery_mode !== 'broadcast' && delivery_mode !== 'mention') {
+      return res.status(400).json({ error: "delivery_mode must be 'broadcast' or 'mention'" });
+    }
+
+    // Verify membership (admins auto-join)
+    const memberCheck = await pool.query(
+      'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    if (memberCheck.rows.length === 0) {
+      if (req.user.role === 'admin') {
+        await pool.query(
+          'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [req.params.id, req.user.id, 'admin']
+        );
+      } else {
+        return res.status(403).json({ error: 'Not a member of this channel' });
+      }
+    }
+
+    const result = await pool.query(
+      'UPDATE channels SET delivery_mode = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, delivery_mode',
+      [delivery_mode, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+
+    // Notify browsers and connected Claude sessions
+    broadcastToChannel(String(req.params.id), {
+      type: 'channel_mode_updated',
+      channel_id: Number(req.params.id),
+      delivery_mode: result.rows[0].delivery_mode,
+      updated_by: req.user.name,
+    });
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
  * POST /api/channels/:id/members - Add member to channel (admin only)
  */
 router.post('/:id/members', requireAdmin, async (req, res) => {

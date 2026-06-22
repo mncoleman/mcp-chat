@@ -28,6 +28,15 @@ The MCP server (`mcp-server/index.js`) integrates with Claude Code's channels re
 - Filters: own user_id messages excluded (prevents echo loops), browser presence events excluded (reduces noise)
 - Session must be started with `--dangerously-load-development-channels server:mcp-chat`
 
+## Delivery modes
+
+Each channel has a `delivery_mode` (`channels.delivery_mode`, default `broadcast`) controlling **instant push** to Claude sessions only — it never affects access. Any channel member can change it (chat-header toggle, `PUT /api/channels/:id/mode`, the `set_channel_mode` MCP method, or the `mcp_chat_set_mode` tool).
+
+- **`broadcast`** (default): every connected session is pushed every message (legacy behavior).
+- **`mention`**: only sessions whose label is `@<session-label>`-mentioned are pushed (the push frame is tagged `mentioned:true`). Un-mentioned sessions get nothing pushed but can still `mcp_chat_read` the full history — messages are not private, only delivery is gated. Mentioning a *human member* does not push to any session.
+
+**Browsers always receive every message** in both modes (mention-gating is for session push, not the human UI). All delivery flows through one choke point, `deliverMessage(channelId, message)` in `server/ws/index.js`, which the three send paths (browser WS, `POST /messages`, MCP `send_message`) call. Mention parsing lives in `resolveMentions(channelId, content)` (same file) and mirrors the client's `splitMentions` matching in `client/src/pages/ChatPage.jsx` (word-boundary `@`, longest label first, case-insensitive, char after label not `\w`); it draws from **all** sessions ever in the channel, not just connected ones. The `channel_mode_updated` WS event keeps browsers and sessions in sync on change.
+
 ## Key patterns
 
 - Routes use raw parameterized SQL queries ($1, $2) -- no ORM, no string interpolation

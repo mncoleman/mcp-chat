@@ -10,7 +10,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Send, Hash, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X } from 'lucide-react'
+import { Send, Hash, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone } from 'lucide-react'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -77,6 +77,9 @@ export default function ChatPage() {
   const [editingSessionId, setEditingSessionId] = useState(null)
   const [sessionLabelDraft, setSessionLabelDraft] = useState('')
 
+  // Channel delivery-mode state
+  const [savingMode, setSavingMode] = useState(false)
+
   // Refetch channel details when a Claude session connects/disconnects
   const onSessionPresenceChange = useCallback(() => {
     if (channelId) {
@@ -90,6 +93,15 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
     }
     toast.info(updatedBy ? `${updatedBy} updated the channel instructions` : 'Channel instructions updated')
+  }, [channelId, queryClient])
+
+  // React to live delivery-mode changes from other members/sessions
+  const onModeChange = useCallback((mode, updatedBy) => {
+    if (channelId) {
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+    }
+    const label = mode === 'mention' ? 'Mentions only' : 'Broadcast'
+    toast.info(updatedBy ? `${updatedBy} set delivery to ${label}` : `Delivery set to ${label}`)
   }, [channelId, queryClient])
 
   // Fetch user's channels
@@ -120,7 +132,7 @@ export default function ChatPage() {
   })
 
   // WebSocket for real-time
-  const { messages: wsMessages, presence, sessionLabels: liveSessionLabels, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange })
+  const { messages: wsMessages, presence, sessionLabels: liveSessionLabels, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange, onModeChange })
 
   // Combine history + live messages (memoized so downstream memos that depend on
   // it -- sessionLabelMap, the mention pipeline -- keep stable identity).
@@ -380,6 +392,20 @@ export default function ChatPage() {
     }
   }
 
+  const handleSetMode = async (mode) => {
+    if (savingMode || mode === (channelDetails?.delivery_mode || 'broadcast')) return
+    setSavingMode(true)
+    try {
+      await api.put(`/api/channels/${channelId}/mode`, { delivery_mode: mode })
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+      toast.success(mode === 'mention' ? 'Delivery set to Mentions only' : 'Delivery set to Broadcast')
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to change delivery mode')
+    } finally {
+      setSavingMode(false)
+    }
+  }
+
   const handleRenameSession = async (sessionId) => {
     const label = sessionLabelDraft.trim()
     if (!label) { setEditingSessionId(null); return }
@@ -443,6 +469,42 @@ export default function ChatPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
+              {/* Delivery-mode toggle (any member). Broadcast = push every message to
+                  every session; Mentions only = push only to @-mentioned sessions
+                  (others can still mcp_chat_read). Browsers always see everything. */}
+              <div
+                className="flex items-center rounded-md border p-0.5"
+                title="Delivery mode -- who gets instant pushes. Broadcast: every connected session. Mentions only: just @-mentioned sessions (others can still read history). Browsers always see everything."
+              >
+                <button
+                  type="button"
+                  disabled={savingMode}
+                  onClick={() => handleSetMode('broadcast')}
+                  className={cn(
+                    'flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors disabled:opacity-50',
+                    (channelDetails?.delivery_mode || 'broadcast') === 'broadcast'
+                      ? 'bg-secondary text-secondary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <Megaphone className="h-3.5 w-3.5" />
+                  <span className="hidden lg:inline">Broadcast</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={savingMode}
+                  onClick={() => handleSetMode('mention')}
+                  className={cn(
+                    'flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors disabled:opacity-50',
+                    channelDetails?.delivery_mode === 'mention'
+                      ? 'bg-secondary text-secondary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <AtSign className="h-3.5 w-3.5" />
+                  <span className="hidden lg:inline">Mentions only</span>
+                </button>
+              </div>
               <Button
                 variant={channelDetails?.instructions ? 'secondary' : 'ghost'}
                 size="sm"

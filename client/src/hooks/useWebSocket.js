@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-export function useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange } = {}) {
+export function useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange, onModeChange } = {}) {
   const wsRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [presence, setPresence] = useState({})
@@ -11,6 +11,8 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
   onSessionPresenceChangeRef.current = onSessionPresenceChange
   const onInstructionsChangeRef = useRef(onInstructionsChange)
   onInstructionsChangeRef.current = onInstructionsChange
+  const onModeChangeRef = useRef(onModeChange)
+  onModeChangeRef.current = onModeChange
 
   const connect = useCallback(() => {
     const token = localStorage.getItem('token')
@@ -67,6 +69,10 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
       } else if (data.type === 'channel_instructions_updated') {
         if (onInstructionsChangeRef.current) {
           onInstructionsChangeRef.current(data.instructions, data.updated_by)
+        }
+      } else if (data.type === 'channel_mode_updated') {
+        if (onModeChangeRef.current) {
+          onModeChangeRef.current(data.delivery_mode, data.updated_by)
         }
       }
     }

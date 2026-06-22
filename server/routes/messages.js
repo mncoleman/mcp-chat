@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
+const { deliverMessage } = require('../ws/index');
 
 /**
  * GET /api/channels/:channelId/messages - Get messages for a channel
@@ -101,13 +102,9 @@ router.post('/:channelId/messages', async (req, res) => {
       message.session_label = labelResult.rows[0]?.label || null;
     }
 
-    // Broadcast via WebSocket (attached by server index)
-    if (req.app.locals.broadcast) {
-      req.app.locals.broadcast(req.params.channelId, {
-        type: 'new_message',
-        message,
-      });
-    }
+    // Deliver via WebSocket, honoring the channel's delivery mode
+    // (broadcast to all, or push only to @-mentioned sessions).
+    await deliverMessage(req.params.channelId, message);
 
     res.status(201).json(message);
   } catch (err) {
