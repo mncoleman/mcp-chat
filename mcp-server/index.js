@@ -12,11 +12,16 @@ const CONFIG_DIR = path.join(require('os').homedir(), '.mcp-chat');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 // Marker file the status-line wrapper reads to decide whether to report this
 // session's remaining-context %. Present+fresh only while actually connected.
-// Keyed by the Claude Code session id so concurrent same-machine sessions each
-// own a private marker and never clobber each other. The legacy plain name is
-// only used as a defensive fallback when the env id is somehow absent.
-const CC_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID || null;
-const MARKER_FILE = path.join(CONFIG_DIR, CC_SESSION_ID ? `active-session-${CC_SESSION_ID}.json` : 'active-session.json');
+// Keyed by the PROJECT DIRECTORY (not the Claude session id): the connector's
+// CLAUDE_CODE_SESSION_ID is ephemeral and does NOT match the id the status line
+// reports for resumed sessions, so session-id keying silently failed. The
+// project dir is stable and identical on both sides -- the connector has
+// CLAUDE_PROJECT_DIR and the status-line stdin has workspace.project_dir. The
+// marker also stamps project_dir so the wrapper can match it exactly.
+const PROJECT_DIR = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+const PROJECT_KEY = crypto.createHash('sha1').update(PROJECT_DIR).digest('hex').slice(0, 16);
+const CC_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID || null; // informational only now
+const MARKER_FILE = path.join(CONFIG_DIR, `active-session-${PROJECT_KEY}.json`);
 
 const MCP_CHAT_URL = process.env.MCP_CHAT_URL;
 if (!MCP_CHAT_URL) {
@@ -61,9 +66,12 @@ function saveConfig(config) {
 // is fresh (<15 min old). Teardown is therefore crash-safe: if the process dies
 // without clearing the marker, it simply goes stale and reporting stops.
 //
-// Markers are PER SESSION: each is keyed by the Claude Code session id
-// (active-session-<id>.json), so two concurrent Claude Code sessions on the same
-// machine each own a private marker and never read/POST/remove the other's.
+// Markers are keyed by the PROJECT DIRECTORY: each is
+// active-session-<sha1(project_dir).slice(0,16)>.json and stamped with the
+// project_dir it belongs to, so the wrapper can match it against the status-line
+// stdin workspace.project_dir. Residual limitation: two concurrent channel
+// sessions in the SAME project dir share one marker (last writer wins) -- a
+// narrow, acceptable case.
 const MARKER_MAX_AGE_MS = 15 * 60 * 1000; // 15 min -- matches the wrapper's freshness gate
 const MARKER_FILE_RE = /^active-session(-.*)?\.json$/;
 
@@ -75,6 +83,7 @@ function writeSessionMarker() {
       session_token: sessionState.sessionToken,
       token: sessionState.token,
       api_base_url: MCP_CHAT_URL,
+      project_dir: PROJECT_DIR,
       cc_session_id: CC_SESSION_ID,
       channel_id: sessionState.channelId,
       channel_name: sessionState.channelName,
@@ -635,13 +644,17 @@ live remaining-context % as a badge in the "Claude Sessions" list. It is a thin,
   straight through -- your status line never changes appearance and is never
   delayed.
 - It **only** reports context while an mcp-chat session is actually connected.
-  This connector writes a **per-session** marker file
-  \`${CONFIG_DIR}/active-session-<claude-session-id>.json\` on connect and removes
-  it on disconnect; the wrapper resolves **its own** session's marker from the
-  status-line stdin \`session_id\`, so two concurrent sessions on the same
-  machine never collide. When you are not connected -- or after a crash leaves a
-  stale marker -- it silently does nothing (stale markers are also swept on the
-  next connect). **No SessionEnd hook is required**; teardown is crash-safe.
+  This connector writes a marker file keyed by the **project directory**
+  (\`${CONFIG_DIR}/active-session-<projectdir-hash>.json\`, stamped with its
+  \`project_dir\`) on connect and removes it on disconnect; the wrapper resolves
+  **its own** marker by matching the status-line stdin \`workspace.project_dir\`.
+  The project dir is stable across resumed sessions, so this survives a session
+  resume where the Claude session id would have changed. When you are not
+  connected -- or after a crash leaves a stale marker -- it silently does nothing
+  (stale markers are also swept on the next connect). **No SessionEnd hook is
+  required**; teardown is crash-safe. Residual limitation: two concurrent channel
+  sessions in the **same project dir** share one marker (last writer wins) -- a
+  narrow, acceptable case.
 
 The install is **idempotent** -- running these steps again when the wrapper is
 already installed is a no-op.

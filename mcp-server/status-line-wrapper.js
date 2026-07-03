@@ -16,14 +16,20 @@
  *
  *   2. ONLY IF a fresh mcp-chat session marker exists, it fire-and-forgets a
  *      POST of your remaining-context % to the mcp-chat server so other agents
- *      in your channel can see it. The marker is PER SESSION: it is resolved
- *      from the status-line stdin `session_id` (the connector writes
- *      ~/.mcp-chat/active-session-<session_id>.json keyed by the same id), with
- *      a fall back to the legacy shared ~/.mcp-chat/active-session.json. This
- *      keeps two concurrent same-machine sessions from clobbering each other.
- *      The POST never blocks or delays (1) and swallows every error. When the
- *      marker is missing or stale (>15 min old, i.e. you are not currently
- *      connected to mcp-chat), it does nothing.
+ *      in your channel can see it. The marker is keyed by the PROJECT
+ *      DIRECTORY: it is resolved from the status-line stdin
+ *      `workspace.project_dir` (the connector writes
+ *      ~/.mcp-chat/active-session-<sha1(project_dir)[:16]>.json, stamped with
+ *      that project_dir). The project dir is stable across a session resume,
+ *      whereas the Claude session id is not -- which is why keying by session id
+ *      silently failed for resumed sessions. Resolution is robust: it matches on
+ *      the stamped project_dir, enumerates all markers as a fallback, and falls
+ *      back to a lone fresh marker or the legacy shared
+ *      ~/.mcp-chat/active-session.json. The POST never blocks or delays (1) and
+ *      swallows every error. When no matching fresh marker exists (>15 min old,
+ *      i.e. you are not currently connected to mcp-chat), it does nothing.
+ *      Residual caveat: two concurrent channel sessions in the SAME project dir
+ *      share one marker (last writer wins) -- a narrow, acceptable case.
  *
  * Because the gate is the marker file -- not a Claude Code hook -- teardown is
  * crash-safe: if a session dies without cleaning up, its marker goes stale and
@@ -37,6 +43,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const CONFIG_DIR = path.join(os.homedir(), '.mcp-chat');
@@ -149,32 +156,93 @@ function extractPct(parsed) {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
-function readFreshMarker(parsed) {
-  // Resolve THIS session's marker from the status-line stdin session_id: the
-  // connector writes active-session-<session_id>.json keyed by the same id. Fall
-  // back to the legacy shared marker only when no per-session file exists (older
-  // connector, or missing CLAUDE_CODE_SESSION_ID). First valid+fresh one wins.
-  const sid = parsed && typeof parsed.session_id === 'string' ? parsed.session_id : null;
-  const candidates = [];
-  if (sid) candidates.push(path.join(CONFIG_DIR, `active-session-${sid}.json`));
-  candidates.push(LEGACY_MARKER_FILE);
-
-  for (const file of candidates) {
-    let marker;
-    try {
-      marker = JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
-      continue; // missing or unparseable -> try next candidate
-    }
-    if (!marker || !marker.session_token || !marker.token || !marker.api_base_url) {
-      continue;
-    }
-    const ts = Date.parse(marker.updated_at);
-    if (!Number.isFinite(ts) || Date.now() - ts > MARKER_MAX_AGE_MS) {
-      continue; // stale -> the session is (probably) gone; try next candidate
-    }
-    return marker;
+// A marker is usable only if it carries the auth fields AND is fresh (<15 min).
+function isFreshValid(marker) {
+  if (!marker || !marker.session_token || !marker.token || !marker.api_base_url) {
+    return false;
   }
+  const ts = Date.parse(marker.updated_at);
+  return Number.isFinite(ts) && Date.now() - ts <= MARKER_MAX_AGE_MS;
+}
+
+// Read + parse a marker JSON file; never throws (returns null on any error).
+function readMarkerFile(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function readFreshMarker(parsed) {
+  // Resolve THIS session's marker by PROJECT DIRECTORY: the connector writes
+  // active-session-<sha1(project_dir)[:16]>.json stamped with its project_dir.
+  // The project dir is stable across a session resume, whereas the Claude
+  // session id is not -- so we match on the project dir, not the session id.
+  const pd = parsed && ((parsed.workspace && parsed.workspace.project_dir) ||
+    (parsed.workspace && parsed.workspace.current_dir) || parsed.cwd);
+  const projectDir = pd ? path.resolve(String(pd)) : null;
+
+  // (a) Direct hit: the marker keyed by this project dir's hash, if its stamped
+  //     project_dir matches exactly.
+  if (projectDir) {
+    let projectKey = null;
+    try {
+      projectKey = crypto.createHash('sha1').update(projectDir).digest('hex').slice(0, 16);
+    } catch {}
+    if (projectKey) {
+      const marker = readMarkerFile(path.join(CONFIG_DIR, `active-session-${projectKey}.json`));
+      if (marker && isFreshValid(marker) && markerProjectDir(marker) === projectDir) {
+        return marker;
+      }
+    }
+  }
+
+  // Enumerate all active-session-*.json markers once for the fallbacks below.
+  let names = [];
+  try {
+    names = fs.readdirSync(CONFIG_DIR).filter((n) => /^active-session-.*\.json$/.test(n));
+  } catch {
+    names = [];
+  }
+
+  // (b) Robust fallback: among fresh+valid markers, return the FIRST whose
+  //     stamped project_dir matches this session's project dir. Covers a hash
+  //     mismatch (e.g. path-normalisation differences on either side).
+  if (projectDir) {
+    for (const name of names) {
+      const marker = readMarkerFile(path.join(CONFIG_DIR, name));
+      if (marker && isFreshValid(marker) && markerProjectDir(marker) === projectDir) {
+        return marker;
+      }
+    }
+  }
+
+  // (c) Single-session fallback: if the project dir gave no match, collect ALL
+  //     fresh+valid markers; if EXACTLY ONE exists, use it. Covers the common
+  //     single-session case even if project_dir is unexpectedly absent.
+  const fresh = [];
+  for (const name of names) {
+    const marker = readMarkerFile(path.join(CONFIG_DIR, name));
+    if (marker && isFreshValid(marker)) fresh.push(marker);
+  }
+  if (fresh.length === 1) return fresh[0];
+
+  // (d) Legacy fallback: the pre-per-session shared marker.
+  const legacy = readMarkerFile(LEGACY_MARKER_FILE);
+  if (legacy && isFreshValid(legacy)) return legacy;
+
+  // (e) Nothing usable.
+  return null;
+}
+
+// Normalise a marker's stamped project_dir for comparison; null if absent/bad.
+function markerProjectDir(marker) {
+  try {
+    if (marker && typeof marker.project_dir === 'string') {
+      return path.resolve(marker.project_dir);
+    }
+  } catch {}
   return null;
 }
 
