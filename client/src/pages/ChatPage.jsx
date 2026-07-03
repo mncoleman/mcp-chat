@@ -537,9 +537,9 @@ export default function ChatPage() {
                 </div>
               ) : (
                 <>
-                  <span className="font-semibold truncate">{channelDetails?.name || 'Loading...'}</span>
+                  <span className="font-semibold truncate min-w-0">{channelDetails?.name || 'Loading...'}</span>
                   {channelDetails?.description && (
-                    <span className="text-sm text-muted-foreground hidden md:inline truncate">
+                    <span className="text-sm text-muted-foreground hidden md:inline truncate min-w-0">
                       -- {channelDetails.description}
                     </span>
                   )}
@@ -555,7 +555,7 @@ export default function ChatPage() {
                 </>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               {/* Delivery-mode toggle (any member). Broadcast = push every message to
                   every session; Mentions only = push only to @-mentioned sessions
                   (others can still mcp_chat_read). Browsers always see everything. */}
