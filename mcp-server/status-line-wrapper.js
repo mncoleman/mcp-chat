@@ -219,14 +219,17 @@ function readFreshMarker(parsed) {
   }
 
   // (c) Single-session fallback: if the project dir gave no match, collect ALL
-  //     fresh+valid markers; if EXACTLY ONE exists, use it. Covers the common
-  //     single-session case even if project_dir is unexpectedly absent.
+  //     fresh+valid markers; if EXACTLY ONE exists AND it carries no project_dir
+  //     stamp, use it (covers a pre-1.8.0 marker in a genuine single-session
+  //     setup). A stamped-but-non-matching marker belongs to a DIFFERENT project
+  //     and must never be posted to -- that would mis-attribute this session's %
+  //     to another session's badge.
   const fresh = [];
   for (const name of names) {
     const marker = readMarkerFile(path.join(CONFIG_DIR, name));
     if (marker && isFreshValid(marker)) fresh.push(marker);
   }
-  if (fresh.length === 1) return fresh[0];
+  if (fresh.length === 1 && markerProjectDir(fresh[0]) === null) return fresh[0];
 
   // (d) Legacy fallback: the pre-per-session shared marker.
   const legacy = readMarkerFile(LEGACY_MARKER_FILE);
