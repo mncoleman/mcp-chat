@@ -12,7 +12,11 @@ const CONFIG_DIR = path.join(require('os').homedir(), '.mcp-chat');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 // Marker file the status-line wrapper reads to decide whether to report this
 // session's remaining-context %. Present+fresh only while actually connected.
-const MARKER_FILE = path.join(CONFIG_DIR, 'active-session.json');
+// Keyed by the Claude Code session id so concurrent same-machine sessions each
+// own a private marker and never clobber each other. The legacy plain name is
+// only used as a defensive fallback when the env id is somehow absent.
+const CC_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID || null;
+const MARKER_FILE = path.join(CONFIG_DIR, CC_SESSION_ID ? `active-session-${CC_SESSION_ID}.json` : 'active-session.json');
 
 const MCP_CHAT_URL = process.env.MCP_CHAT_URL;
 if (!MCP_CHAT_URL) {
@@ -56,6 +60,13 @@ function saveConfig(config) {
 // self-gating status-line wrapper only POSTs context while this file exists and
 // is fresh (<15 min old). Teardown is therefore crash-safe: if the process dies
 // without clearing the marker, it simply goes stale and reporting stops.
+//
+// Markers are PER SESSION: each is keyed by the Claude Code session id
+// (active-session-<id>.json), so two concurrent Claude Code sessions on the same
+// machine each own a private marker and never read/POST/remove the other's.
+const MARKER_MAX_AGE_MS = 15 * 60 * 1000; // 15 min -- matches the wrapper's freshness gate
+const MARKER_FILE_RE = /^active-session(-.*)?\.json$/;
+
 function writeSessionMarker() {
   try {
     if (!sessionState.connected || !sessionState.sessionToken || !sessionState.token) return;
@@ -64,6 +75,7 @@ function writeSessionMarker() {
       session_token: sessionState.sessionToken,
       token: sessionState.token,
       api_base_url: MCP_CHAT_URL,
+      cc_session_id: CC_SESSION_ID,
       channel_id: sessionState.channelId,
       channel_name: sessionState.channelName,
       session_label: sessionState.sessionLabel || null,
@@ -80,6 +92,32 @@ function clearSessionMarker() {
     fs.rmSync(MARKER_FILE, { force: true });
   } catch {
     // ignore -- best-effort cleanup (ENOENT etc.)
+  }
+}
+
+// Best-effort cleanup of markers left behind by crashed sessions: any
+// active-session*.json whose updated_at is stale (>15 min) or unparseable is
+// removed. Runs once on connect. NEVER throws -- purely opportunistic.
+function sweepStaleMarkers() {
+  try {
+    const entries = fs.readdirSync(CONFIG_DIR);
+    for (const name of entries) {
+      if (!MARKER_FILE_RE.test(name)) continue;
+      const full = path.join(CONFIG_DIR, name);
+      let stale = true;
+      try {
+        const marker = JSON.parse(fs.readFileSync(full, 'utf8'));
+        const ts = Date.parse(marker && marker.updated_at);
+        stale = !Number.isFinite(ts) || Date.now() - ts > MARKER_MAX_AGE_MS;
+      } catch {
+        stale = true; // unparseable -> treat as stale
+      }
+      if (stale) {
+        try { fs.rmSync(full, { force: true }); } catch {}
+      }
+    }
+  } catch {
+    // ignore -- CONFIG_DIR may not exist yet, or be unreadable; never throw
   }
 }
 
@@ -408,6 +446,7 @@ if (envToken && envChannel) {
     process.stderr.write(`[mcp-chat] Auto-connected to #${sessionState.channelName} as ${userName}\n`);
   }).finally(() => {
     connectWebSocket();
+    sweepStaleMarkers();
     writeSessionMarker();
   });
 }
@@ -595,11 +634,14 @@ live remaining-context % as a badge in the "Claude Sessions" list. It is a thin,
 - It **always** runs your original status-line command and passes its output
   straight through -- your status line never changes appearance and is never
   delayed.
-- It **only** reports context while an mcp-chat session is actually connected
-  (it checks the marker file \`${MARKER_FILE}\`, which this connector writes on
-  connect and removes on disconnect). When you are not connected -- or after a
-  crash leaves a stale marker -- it silently does nothing. **No SessionEnd hook
-  is required**; teardown is crash-safe.
+- It **only** reports context while an mcp-chat session is actually connected.
+  This connector writes a **per-session** marker file
+  \`${CONFIG_DIR}/active-session-<claude-session-id>.json\` on connect and removes
+  it on disconnect; the wrapper resolves **its own** session's marker from the
+  status-line stdin \`session_id\`, so two concurrent sessions on the same
+  machine never collide. When you are not connected -- or after a crash leaves a
+  stale marker -- it silently does nothing (stale markers are also swept on the
+  next connect). **No SessionEnd hook is required**; teardown is crash-safe.
 
 The install is **idempotent** -- running these steps again when the wrapper is
 already installed is a no-op.
@@ -688,7 +730,9 @@ async function handleToolCall(name, args) {
 
         // Start WebSocket listener for real-time push
         connectWebSocket();
-        // Write the marker so the status-line wrapper can report context for this session
+        // Sweep any crashed-session markers, then write ours so the status-line
+        // wrapper can report context for this session.
+        sweepStaleMarkers();
         writeSessionMarker();
 
         // Check for package updates
@@ -756,7 +800,9 @@ async function handleToolCall(name, args) {
         } catch {}
 
         connectWebSocket();
-        // Write the marker so the status-line wrapper can report context for this session
+        // Sweep any crashed-session markers, then write ours so the status-line
+        // wrapper can report context for this session.
+        sweepStaleMarkers();
         writeSessionMarker();
         let joinText = `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Your session is named "${sessionLabel}"; use mcp_chat_set_name to change it. Live messages are now being pushed.`;
         joinText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.`;

@@ -16,9 +16,14 @@
  *
  *   2. ONLY IF a fresh mcp-chat session marker exists, it fire-and-forgets a
  *      POST of your remaining-context % to the mcp-chat server so other agents
- *      in your channel can see it. The POST never blocks or delays (1) and
- *      swallows every error. When the marker is missing or stale (>15 min old,
- *      i.e. you are not currently connected to mcp-chat), it does nothing.
+ *      in your channel can see it. The marker is PER SESSION: it is resolved
+ *      from the status-line stdin `session_id` (the connector writes
+ *      ~/.mcp-chat/active-session-<session_id>.json keyed by the same id), with
+ *      a fall back to the legacy shared ~/.mcp-chat/active-session.json. This
+ *      keeps two concurrent same-machine sessions from clobbering each other.
+ *      The POST never blocks or delays (1) and swallows every error. When the
+ *      marker is missing or stale (>15 min old, i.e. you are not currently
+ *      connected to mcp-chat), it does nothing.
  *
  * Because the gate is the marker file -- not a Claude Code hook -- teardown is
  * crash-safe: if a session dies without cleaning up, its marker goes stale and
@@ -35,7 +40,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const CONFIG_DIR = path.join(os.homedir(), '.mcp-chat');
-const MARKER_FILE = path.join(CONFIG_DIR, 'active-session.json');
+const LEGACY_MARKER_FILE = path.join(CONFIG_DIR, 'active-session.json');
 const WRAPPER_CONFIG_FILE = path.join(CONFIG_DIR, 'status-line-config.json');
 
 const MARKER_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes -> treat older markers as stale
@@ -128,7 +133,7 @@ function maybeReportContext(parsed) {
   const pct = extractPct(parsed);
   if (pct == null) return; // nothing meaningful to report
 
-  const marker = readFreshMarker();
+  const marker = readFreshMarker(parsed);
   if (!marker) return; // not connected / stale -> self-no-op
 
   postContext(marker, pct);
@@ -144,21 +149,33 @@ function extractPct(parsed) {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
-function readFreshMarker() {
-  let marker;
-  try {
-    marker = JSON.parse(fs.readFileSync(MARKER_FILE, 'utf8'));
-  } catch {
-    return null; // missing or unparseable
+function readFreshMarker(parsed) {
+  // Resolve THIS session's marker from the status-line stdin session_id: the
+  // connector writes active-session-<session_id>.json keyed by the same id. Fall
+  // back to the legacy shared marker only when no per-session file exists (older
+  // connector, or missing CLAUDE_CODE_SESSION_ID). First valid+fresh one wins.
+  const sid = parsed && typeof parsed.session_id === 'string' ? parsed.session_id : null;
+  const candidates = [];
+  if (sid) candidates.push(path.join(CONFIG_DIR, `active-session-${sid}.json`));
+  candidates.push(LEGACY_MARKER_FILE);
+
+  for (const file of candidates) {
+    let marker;
+    try {
+      marker = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      continue; // missing or unparseable -> try next candidate
+    }
+    if (!marker || !marker.session_token || !marker.token || !marker.api_base_url) {
+      continue;
+    }
+    const ts = Date.parse(marker.updated_at);
+    if (!Number.isFinite(ts) || Date.now() - ts > MARKER_MAX_AGE_MS) {
+      continue; // stale -> the session is (probably) gone; try next candidate
+    }
+    return marker;
   }
-  if (!marker || !marker.session_token || !marker.token || !marker.api_base_url) {
-    return null;
-  }
-  const ts = Date.parse(marker.updated_at);
-  if (!Number.isFinite(ts) || Date.now() - ts > MARKER_MAX_AGE_MS) {
-    return null; // stale -> the session is (probably) gone; do not report
-  }
-  return marker;
+  return null;
 }
 
 function postContext(marker, pct) {
