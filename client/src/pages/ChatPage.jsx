@@ -498,7 +498,7 @@ export default function ChatPage() {
 
       {/* Chat area */}
       {channelId ? (
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           {/* Channel header */}
           <div className="flex items-center justify-between px-4 h-14 border-b shrink-0">
             <div className="flex items-center gap-2 min-w-0">
