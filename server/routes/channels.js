@@ -118,7 +118,7 @@ router.get('/:id', async (req, res) => {
     );
 
     const sessionsResult = await pool.query(
-      `SELECT s.id, s.session_token, s.label, s.is_connected, s.connected_at, u.name as user_name, u.id as user_id
+      `SELECT s.id, s.session_token, s.label, s.is_connected, s.connected_at, s.context_remaining_pct, u.name as user_name, u.id as user_id
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.channel_id = $1 AND s.is_connected = true
@@ -229,6 +229,75 @@ router.put('/:id/mode', async (req, res) => {
     });
 
     res.json(result.rows[0]);
+  } catch (err) {
+    console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * PUT /api/channels/:id - Edit channel name and/or description after creation.
+ * Server-enforced owner/admin gate: caller must be a channel admin OR a global
+ * admin. Broadcasts 'channel_updated' so other clients update live.
+ */
+router.put('/:id', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+
+    const hasName = name !== undefined;
+    const hasDescription = description !== undefined;
+    if (!hasName && !hasDescription) {
+      return res.status(400).json({ error: 'Provide name and/or description' });
+    }
+    if (hasName) {
+      if (typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 100) {
+        return res.status(400).json({ error: 'name must be a string 1-100 characters' });
+      }
+    }
+    if (hasDescription) {
+      if (!(description === null || (typeof description === 'string' && description.length <= 500))) {
+        return res.status(400).json({ error: 'description must be a string (max 500 characters) or null' });
+      }
+    }
+
+    // Owner/admin gate: channel admin OR global admin
+    const adminCheck = await pool.query(
+      "SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2 AND role = 'admin'",
+      [req.params.id, req.user.id]
+    );
+    if (adminCheck.rows.length === 0 && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'You must be a channel admin to modify it' });
+    }
+
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+    if (hasName) {
+      updates.push(`name = $${paramIndex++}`);
+      values.push(name.trim());
+    }
+    if (hasDescription) {
+      updates.push(`description = $${paramIndex++}`);
+      values.push(description === null ? null : (description.trim() || null));
+    }
+    updates.push('updated_at = NOW()');
+    values.push(req.params.id);
+
+    const result = await pool.query(
+      `UPDATE channels SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, description`,
+      values
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+    const row = result.rows[0];
+
+    broadcastToChannel(String(req.params.id), {
+      type: 'channel_updated',
+      channel_id: Number(req.params.id),
+      name: row.name,
+      description: row.description,
+      updated_by: req.user.name,
+    });
+
+    res.json({ id: row.id, name: row.name, description: row.description });
   } catch (err) {
     console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }

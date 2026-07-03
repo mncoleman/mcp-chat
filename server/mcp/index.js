@@ -227,7 +227,7 @@ function setupMcpRoutes(app) {
           }
 
           const result = await pool.query(
-            `SELECT s.session_token, s.label, s.is_connected, u.name as user_name, u.id as user_id
+            `SELECT s.session_token, s.label, s.is_connected, s.context_remaining_pct, u.name as user_name, u.id as user_id
              FROM sessions s JOIN users u ON u.id = s.user_id
              WHERE s.channel_id = $1 AND s.is_connected = true`,
             [channel_id]
@@ -478,14 +478,30 @@ function setupMcpRoutes(app) {
         case 'modify_channel': {
           const { channel_id, name, description } = args;
           if (!channel_id) return res.json({ error: 'channel_id is required' });
-          if (!name && description === undefined) return res.json({ error: 'Provide name and/or description to update' });
 
-          // Verify caller is admin of the channel
+          const hasName = name !== undefined;
+          const hasDescription = description !== undefined;
+          if (!hasName && !hasDescription) return res.json({ error: 'Provide name and/or description to update' });
+
+          // Validate (mirror REST PUT /api/channels/:id): name is a non-empty
+          // string <=100 chars when provided; description is null or a string <=500.
+          if (hasName) {
+            if (typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 100) {
+              return res.json({ error: 'name must be a string 1-100 characters' });
+            }
+          }
+          if (hasDescription) {
+            if (!(description === null || (typeof description === 'string' && description.length <= 500))) {
+              return res.json({ error: 'description must be a string (max 500 characters) or null' });
+            }
+          }
+
+          // Owner/admin gate: caller is a channel admin OR a global admin
           const modAdminCheck = await pool.query(
             "SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2 AND role = 'admin'",
             [channel_id, user.id]
           );
-          if (modAdminCheck.rows.length === 0) {
+          if (modAdminCheck.rows.length === 0 && user.role !== 'admin') {
             return res.status(403).json({ error: 'You must be a channel admin to modify it' });
           }
 
@@ -493,13 +509,13 @@ function setupMcpRoutes(app) {
           const values = [];
           let paramIndex = 1;
 
-          if (name) {
+          if (hasName) {
             updates.push(`name = $${paramIndex++}`);
             values.push(name.trim());
           }
-          if (description !== undefined) {
+          if (hasDescription) {
             updates.push(`description = $${paramIndex++}`);
-            values.push(description || null);
+            values.push(description === null ? null : (description.trim() || null));
           }
           updates.push(`updated_at = NOW()`);
           values.push(channel_id);
@@ -509,6 +525,15 @@ function setupMcpRoutes(app) {
             values
           );
           if (result.rows.length === 0) return res.json({ error: 'Channel not found' });
+
+          broadcastToChannel(String(channel_id), {
+            type: 'channel_updated',
+            channel_id: Number(channel_id),
+            name: result.rows[0].name,
+            description: result.rows[0].description,
+            updated_by: user.name,
+          });
+
           return res.json({ success: true, channel: result.rows[0] });
         }
 

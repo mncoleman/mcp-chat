@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-export function useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange, onModeChange } = {}) {
+export function useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange, onModeChange, onChannelUpdated } = {}) {
   const wsRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [presence, setPresence] = useState({})
   const [sessionLabels, setSessionLabels] = useState({})
+  const [liveSessionContext, setLiveSessionContext] = useState({}) // session_token -> pct
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef(null)
   const onSessionPresenceChangeRef = useRef(onSessionPresenceChange)
@@ -13,6 +14,8 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
   onInstructionsChangeRef.current = onInstructionsChange
   const onModeChangeRef = useRef(onModeChange)
   onModeChangeRef.current = onModeChange
+  const onChannelUpdatedRef = useRef(onChannelUpdated)
+  onChannelUpdatedRef.current = onChannelUpdated
 
   const connect = useCallback(() => {
     const token = localStorage.getItem('token')
@@ -58,6 +61,14 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
           }
           return next
         })
+        // When a session disconnects, drop any reported context % so the badge clears.
+        if (data.status !== 'connected' && data.session_token) {
+          setLiveSessionContext((prev) => {
+            const n = { ...prev }
+            delete n[data.session_token]
+            return n
+          })
+        }
         // Notify when a Claude session connects/disconnects
         if (data.session_token && onSessionPresenceChangeRef.current) {
           onSessionPresenceChangeRef.current()
@@ -66,6 +77,10 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
         if (data.session_token) {
           setSessionLabels((prev) => ({ ...prev, [data.session_token]: data.label }))
         }
+      } else if (data.type === 'session_context_updated') {
+        if (data.session_token) {
+          setLiveSessionContext((prev) => ({ ...prev, [data.session_token]: data.context_remaining_pct }))
+        }
       } else if (data.type === 'channel_instructions_updated') {
         if (onInstructionsChangeRef.current) {
           onInstructionsChangeRef.current(data.instructions, data.updated_by)
@@ -73,6 +88,10 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
       } else if (data.type === 'channel_mode_updated') {
         if (onModeChangeRef.current) {
           onModeChangeRef.current(data.delivery_mode, data.updated_by)
+        }
+      } else if (data.type === 'channel_updated') {
+        if (onChannelUpdatedRef.current) {
+          onChannelUpdatedRef.current(data)
         }
       }
     }
@@ -98,6 +117,7 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
     setMessages([])
     setPresence({})
     setSessionLabels({})
+    setLiveSessionContext({})
     connect()
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current)
@@ -120,5 +140,5 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
 
   const clearMessages = useCallback(() => setMessages([]), [])
 
-  return { messages, presence, sessionLabels, isConnected, sendMessage, clearMessages }
+  return { messages, presence, sessionLabels, liveSessionContext, isConnected, sendMessage, clearMessages }
 }

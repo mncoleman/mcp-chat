@@ -80,6 +80,12 @@ export default function ChatPage() {
   // Channel delivery-mode state
   const [savingMode, setSavingMode] = useState(false)
 
+  // Channel name + description editor state
+  const [editingChannel, setEditingChannel] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const [descDraft, setDescDraft] = useState('')
+  const [savingChannel, setSavingChannel] = useState(false)
+
   // Refetch channel details when a Claude session connects/disconnects
   const onSessionPresenceChange = useCallback(() => {
     if (channelId) {
@@ -102,6 +108,15 @@ export default function ChatPage() {
     }
     const label = mode === 'mention' ? 'Mentions only' : 'Broadcast'
     toast.info(updatedBy ? `${updatedBy} set delivery to ${label}` : `Delivery set to ${label}`)
+  }, [channelId, queryClient])
+
+  // React to live channel name/description edits from other members/sessions
+  const onChannelUpdated = useCallback((data) => {
+    if (channelId) {
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+    }
+    queryClient.invalidateQueries({ queryKey: ['channels'] })
+    toast.info(`${data?.updated_by || 'Someone'} updated the channel`)
   }, [channelId, queryClient])
 
   // Fetch user's channels
@@ -132,7 +147,7 @@ export default function ChatPage() {
   })
 
   // WebSocket for real-time
-  const { messages: wsMessages, presence, sessionLabels: liveSessionLabels, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange, onModeChange })
+  const { messages: wsMessages, presence, sessionLabels: liveSessionLabels, liveSessionContext, isConnected, sendMessage } = useWebSocket(channelId, { onSessionPresenceChange, onInstructionsChange, onModeChange, onChannelUpdated })
 
   // Combine history + live messages (memoized so downstream memos that depend on
   // it -- sessionLabelMap, the mention pipeline -- keep stable identity).
@@ -392,6 +407,33 @@ export default function ChatPage() {
     }
   }
 
+  // Owner/admin gate for showing the channel-edit affordance (server also enforces).
+  const canEditChannel = user?.role === 'admin' || channelDetails?.members?.some((m) => m.id === user?.id && m.role === 'admin')
+
+  const openChannelEditor = () => {
+    setNameDraft(channelDetails?.name || '')
+    setDescDraft(channelDetails?.description || '')
+    setEditingChannel(true)
+  }
+
+  const handleSaveChannel = async () => {
+    setSavingChannel(true)
+    try {
+      await api.put(`/api/channels/${channelId}`, {
+        name: nameDraft.trim(),
+        description: descDraft.trim() || null,
+      })
+      queryClient.invalidateQueries({ queryKey: ['channel', channelId] })
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      setEditingChannel(false)
+      toast.success('Channel updated')
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update channel')
+    } finally {
+      setSavingChannel(false)
+    }
+  }
+
   const handleSetMode = async (mode) => {
     if (savingMode || mode === (channelDetails?.delivery_mode || 'broadcast')) return
     setSavingMode(true)
@@ -459,13 +501,58 @@ export default function ChatPage() {
         <div className="flex-1 flex flex-col">
           {/* Channel header */}
           <div className="flex items-center justify-between px-4 h-14 border-b shrink-0">
-            <div className="flex items-center gap-2">
-              <Hash className="h-5 w-5 text-muted-foreground" />
-              <span className="font-semibold">{channelDetails?.name || 'Loading...'}</span>
-              {channelDetails?.description && (
-                <span className="text-sm text-muted-foreground hidden md:inline">
-                  -- {channelDetails.description}
-                </span>
+            <div className="flex items-center gap-2 min-w-0">
+              <Hash className="h-5 w-5 text-muted-foreground shrink-0" />
+              {editingChannel ? (
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveChannel()
+                      if (e.key === 'Escape') setEditingChannel(false)
+                    }}
+                    maxLength={100}
+                    placeholder="Channel name"
+                    className="w-40 rounded border border-input bg-background px-2 py-1 text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                  <input
+                    value={descDraft}
+                    onChange={(e) => setDescDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveChannel()
+                      if (e.key === 'Escape') setEditingChannel(false)
+                    }}
+                    maxLength={500}
+                    placeholder="Description (optional)"
+                    className="hidden md:block w-56 rounded border border-input bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                  <button className="text-green-600 hover:opacity-80 disabled:opacity-50 shrink-0" onClick={handleSaveChannel} disabled={savingChannel || !nameDraft.trim()} title="Save">
+                    <Check className="h-4 w-4" />
+                  </button>
+                  <button className="text-muted-foreground hover:opacity-80 disabled:opacity-50 shrink-0" onClick={() => setEditingChannel(false)} disabled={savingChannel} title="Cancel">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span className="font-semibold truncate">{channelDetails?.name || 'Loading...'}</span>
+                  {channelDetails?.description && (
+                    <span className="text-sm text-muted-foreground hidden md:inline truncate">
+                      -- {channelDetails.description}
+                    </span>
+                  )}
+                  {canEditChannel && channelDetails && (
+                    <button
+                      className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                      onClick={openChannelEditor}
+                      title="Edit channel name and description"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -766,6 +853,11 @@ export default function ChatPage() {
             {channelDetails?.active_sessions?.map((session) => {
               const liveLabel = (session.session_token && liveSessionLabels[session.session_token]) || session.label || 'Session'
               const isEditing = editingSessionId === session.id
+              // Live-reported context % takes precedence; fall back to the DB value
+              // from the active_sessions SELECT. Cleared/greyed when disconnected.
+              const ctx = (session.session_token && liveSessionContext[session.session_token] != null)
+                ? liveSessionContext[session.session_token]
+                : session.context_remaining_pct
               return (
                 <div key={session.id} className="group flex items-center gap-2 px-2 py-1.5">
                   <Monitor className="h-4 w-4 text-green-500 shrink-0" />
@@ -792,7 +884,12 @@ export default function ChatPage() {
                   ) : (
                     <>
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs font-medium truncate">{liveLabel}</p>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <p className="text-xs font-medium truncate">{liveLabel}</p>
+                          {ctx != null && session.is_connected && (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">ctx {ctx}%</Badge>
+                          )}
+                        </div>
                         <p className="text-xs text-muted-foreground truncate">{session.user_name}</p>
                       </div>
                       <button

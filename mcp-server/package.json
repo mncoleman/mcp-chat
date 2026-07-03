@@ -31,6 +31,8 @@
     "ws": "^8.16.0"
   },
   "files": [
-    "index.js"
+    "index.js",
+    "status-line-wrapper.js",
+    "skills/mcp-chat-context/SKILL.md"
   ]
 }

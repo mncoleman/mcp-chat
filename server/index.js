@@ -34,6 +34,11 @@ pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS instructions TEXT`)
 pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS delivery_mode TEXT NOT NULL DEFAULT 'broadcast'`)
   .catch(err => console.error('Migration error:', err.message));
 
+// Per-session live remaining-context %, self-reported by the status-line wrapper.
+// 0-100, NULL = unknown. Nullable; no default.
+pool.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_remaining_pct INTEGER`)
+  .catch(err => console.error('Migration error:', err.message));
+
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 4000;

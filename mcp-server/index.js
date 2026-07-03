@@ -10,6 +10,9 @@ const WebSocket = require('ws');
 // Config file stores auth state between sessions
 const CONFIG_DIR = path.join(require('os').homedir(), '.mcp-chat');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+// Marker file the status-line wrapper reads to decide whether to report this
+// session's remaining-context %. Present+fresh only while actually connected.
+const MARKER_FILE = path.join(CONFIG_DIR, 'active-session.json');
 
 const MCP_CHAT_URL = process.env.MCP_CHAT_URL;
 if (!MCP_CHAT_URL) {
@@ -46,6 +49,38 @@ function loadConfig() {
 function saveConfig(config) {
   if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+// ─── Active-session marker (for the status-line context reporter) ─────────────
+// Written on every successful connect/join, removed on disconnect/shutdown. The
+// self-gating status-line wrapper only POSTs context while this file exists and
+// is fresh (<15 min old). Teardown is therefore crash-safe: if the process dies
+// without clearing the marker, it simply goes stale and reporting stops.
+function writeSessionMarker() {
+  try {
+    if (!sessionState.connected || !sessionState.sessionToken || !sessionState.token) return;
+    if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    const marker = {
+      session_token: sessionState.sessionToken,
+      token: sessionState.token,
+      api_base_url: MCP_CHAT_URL,
+      channel_id: sessionState.channelId,
+      channel_name: sessionState.channelName,
+      session_label: sessionState.sessionLabel || null,
+      updated_at: new Date().toISOString(),
+    };
+    fs.writeFileSync(MARKER_FILE, JSON.stringify(marker, null, 2), { mode: 0o600 });
+  } catch (err) {
+    process.stderr.write(`[mcp-chat] Could not write session marker: ${err.message}\n`);
+  }
+}
+
+function clearSessionMarker() {
+  try {
+    fs.rmSync(MARKER_FILE, { force: true });
+  } catch {
+    // ignore -- best-effort cleanup (ENOENT etc.)
+  }
 }
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
@@ -196,6 +231,12 @@ function connectWebSocket() {
           event: 'channel_mode_updated',
           delivery_mode: mode,
         });
+      } else if (data.type === 'channel_updated') {
+        if (data.name && data.name !== sessionState.channelName) sessionState.channelName = data.name;
+        pushChannelMessage('mcp-chat', `Channel renamed/updated to #${data.name}${data.description ? ` -- ${data.description}` : ''}${data.updated_by ? ` by ${data.updated_by}` : ''}.`, {
+          channel: sessionState.channelName,
+          event: 'channel_updated',
+        });
       } else if (data.type === 'presence') {
         // Only push presence for Claude Code sessions (have session_token), not browser refreshes
         if (!data.session_token) return;
@@ -230,6 +271,9 @@ function disconnectWebSocket() {
     try { wsConnection.close(); } catch {}
     wsConnection = null;
   }
+  // Remove the active-session marker so the status-line wrapper stops reporting.
+  // On a channel switch a fresh marker is re-written right after re-registering.
+  clearSessionMarker();
 }
 
 // ─── Browser auth flow ───────────────────────────────────────────────────────
@@ -364,6 +408,7 @@ if (envToken && envChannel) {
     process.stderr.write(`[mcp-chat] Auto-connected to #${sessionState.channelName} as ${userName}\n`);
   }).finally(() => {
     connectWebSocket();
+    writeSessionMarker();
   });
 }
 
@@ -519,6 +564,83 @@ function getTools() {
   ];
 }
 
+// ─── MCP resource: status-line wrapper + one-time install guide ──────────────
+
+const STATUS_LINE_RESOURCE_URI = 'mcp-chat://status-line-wrapper';
+
+function readWrapperSource() {
+  try {
+    return fs.readFileSync(path.join(__dirname, 'status-line-wrapper.js'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function buildStatusLineResourceText() {
+  const wrapperSrc = readWrapperSource();
+  const wrapperPath = path.join(CONFIG_DIR, 'status-line-wrapper.js');
+  const backupPath = path.join(CONFIG_DIR, 'status-line-config.json');
+  const settingsPath = path.join(require('os').homedir(), '.claude', 'settings.json');
+
+  const scriptBlock = wrapperSrc
+    ? '```js\n' + wrapperSrc + '\n```'
+    : '_(Wrapper source could not be read from the installed package. It also ships as `status-line-wrapper.js` inside the `mcp-chat-connect` package directory -- copy it from there.)_';
+
+  return `# MCP Chat -- context status-line wrapper (one-time install)
+
+Installing this once lets **other** Claude Code sessions in your channel see your
+live remaining-context % as a badge in the "Claude Sessions" list. It is a thin,
+**self-gating** wrapper around your existing status line:
+
+- It **always** runs your original status-line command and passes its output
+  straight through -- your status line never changes appearance and is never
+  delayed.
+- It **only** reports context while an mcp-chat session is actually connected
+  (it checks the marker file \`${MARKER_FILE}\`, which this connector writes on
+  connect and removes on disconnect). When you are not connected -- or after a
+  crash leaves a stale marker -- it silently does nothing. **No SessionEnd hook
+  is required**; teardown is crash-safe.
+
+The install is **idempotent** -- running these steps again when the wrapper is
+already installed is a no-op.
+
+## Install steps (perform ONCE)
+
+1. **Check if already installed.** Read \`${settingsPath}\`. If its
+   \`statusLine.command\` already contains \`status-line-wrapper.js\` (i.e. points
+   at \`${wrapperPath}\`), the wrapper is already installed -- **STOP, nothing to
+   do.**
+
+2. **Write the wrapper script** below to \`${wrapperPath}\` with mode \`0755\`
+   (create the \`${CONFIG_DIR}\` directory first if needed, mode \`0700\`).
+
+3. **Back up the current status line.** Take the existing \`statusLine\` object
+   from \`${settingsPath}\` (or \`null\` if there is none) and write:
+   \`\`\`json
+   { "upstream": <the existing statusLine object, or null> }
+   \`\`\`
+   to \`${backupPath}\`. The wrapper reads this to chain your original command.
+
+4. **Point the status line at the wrapper.** Set \`statusLine\` in
+   \`${settingsPath}\` to:
+   \`\`\`json
+   { "type": "command", "command": "node ${wrapperPath}" }
+   \`\`\`
+   (Preserve every other key in \`settings.json\` -- only replace \`statusLine\`.)
+
+That's it. Your status line keeps working exactly as before; context reporting
+turns itself on only while you are connected to mcp-chat.
+
+## To uninstall
+Restore \`statusLine\` in \`${settingsPath}\` from the \`upstream\` value saved in
+\`${backupPath}\` (or remove \`statusLine\` entirely if that was \`null\`).
+
+## Wrapper script (\`${wrapperPath}\`)
+
+${scriptBlock}
+`;
+}
+
 async function handleToolCall(name, args) {
   switch (name) {
     case 'mcp_chat_connect': {
@@ -566,10 +688,13 @@ async function handleToolCall(name, args) {
 
         // Start WebSocket listener for real-time push
         connectWebSocket();
+        // Write the marker so the status-line wrapper can report context for this session
+        writeSessionMarker();
 
         // Check for package updates
         const updateNotice = await checkForUpdate();
         let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Your session is named "${sessionLabel}" -- this name appears on every message you send. Use mcp_chat_set_name to change it. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
+        responseText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.`;
         if (sessionState.deliveryMode === 'mention') {
           responseText += deliveryModeNotice(sessionLabel);
         }
@@ -631,7 +756,10 @@ async function handleToolCall(name, args) {
         } catch {}
 
         connectWebSocket();
+        // Write the marker so the status-line wrapper can report context for this session
+        writeSessionMarker();
         let joinText = `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Your session is named "${sessionLabel}"; use mcp_chat_set_name to change it. Live messages are now being pushed.`;
+        joinText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.`;
         if (sessionState.deliveryMode === 'mention') {
           joinText += deliveryModeNotice(sessionLabel);
         }
@@ -693,7 +821,7 @@ async function handleToolCall(name, args) {
         return { content: [{ type: 'text', text: `No active sessions in #${sessionState.channelName}` }] };
       }
       const formatted = result.sessions.map(s =>
-        `- ${s.user_name} (${s.label || 'Claude session'}) ${s.is_connected ? 'online' : 'offline'}`
+        `- ${s.user_name} (${s.label || 'Claude session'}) ${s.is_connected ? 'online' : 'offline'}${s.context_remaining_pct != null ? ` -- context: ${s.context_remaining_pct}%` : ''}`
       ).join('\n');
       return { content: [{ type: 'text', text: `Active in #${sessionState.channelName}:\n${formatted}` }] };
     }
@@ -850,6 +978,7 @@ async function handleMessage(msg) {
         protocolVersion: '2024-11-05',
         capabilities: {
           tools: {},
+          resources: {},
           experimental: { 'claude/channel': {} },
         },
         serverInfo: { name: 'mcp-chat-connect', version: LOCAL_VERSION },
@@ -862,6 +991,37 @@ async function handleMessage(msg) {
     case 'tools/list':
       sendResponse(id, { tools: getTools() });
       break;
+
+    case 'resources/list':
+      sendResponse(id, {
+        resources: [
+          {
+            uri: STATUS_LINE_RESOURCE_URI,
+            name: 'MCP Chat context status-line wrapper',
+            description: 'One-time, idempotent install for a self-gating status-line wrapper that shares your live remaining-context % with other sessions in your channel.',
+            mimeType: 'text/markdown',
+          },
+        ],
+      });
+      break;
+
+    case 'resources/read': {
+      const uri = params && params.uri;
+      if (uri !== STATUS_LINE_RESOURCE_URI) {
+        sendError(id, -32602, `Unknown resource: ${uri}`);
+        break;
+      }
+      sendResponse(id, {
+        contents: [
+          {
+            uri: STATUS_LINE_RESOURCE_URI,
+            mimeType: 'text/markdown',
+            text: buildStatusLineResourceText(),
+          },
+        ],
+      });
+      break;
+    }
 
     case 'tools/call': {
       const { name, arguments: args } = params;
@@ -901,9 +1061,10 @@ process.stdin.on('data', (chunk) => {
 
 process.stdin.on('end', () => {
   disconnectWebSocket();
+  clearSessionMarker();
   process.exit(0);
 });
 
 // Clean shutdown
-process.on('SIGTERM', () => { disconnectWebSocket(); process.exit(0); });
-process.on('SIGINT', () => { disconnectWebSocket(); process.exit(0); });
+process.on('SIGTERM', () => { disconnectWebSocket(); clearSessionMarker(); process.exit(0); });
+process.on('SIGINT', () => { disconnectWebSocket(); clearSessionMarker(); process.exit(0); });

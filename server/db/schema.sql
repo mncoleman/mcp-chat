@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   is_connected BOOLEAN NOT NULL DEFAULT false,
   connected_at TIMESTAMPTZ,
   disconnected_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  context_remaining_pct INTEGER   -- 0-100, last self-reported remaining context %; NULL = unknown
 );
 
 CREATE TABLE IF NOT EXISTS invites (
