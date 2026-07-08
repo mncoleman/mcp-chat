@@ -34,6 +34,12 @@ pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS instructions TEXT`)
 pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS delivery_mode TEXT NOT NULL DEFAULT 'broadcast'`)
   .catch(err => console.error('Migration error:', err.message));
 
+// Private channels: hidden from and inaccessible to non-members, INCLUDING admins
+// (admins do not see them in listings and cannot auto-join). Default false keeps
+// existing channels public with the legacy admin-sees-all behavior.
+pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT false`)
+  .catch(err => console.error('Migration error:', err.message));
+
 // Per-session live remaining-context %, self-reported by the status-line wrapper.
 // 0-100, NULL = unknown. Nullable; no default.
 pool.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_remaining_pct INTEGER`)

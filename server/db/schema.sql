@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS channels (
   --   'mention'   -- only @<session-label>-mentioned sessions are pushed; others
   --                  can still mcp_chat_read. Browsers always receive everything.
   delivery_mode TEXT NOT NULL DEFAULT 'broadcast' CHECK (delivery_mode IN ('broadcast', 'mention')),
+  -- Private channels are hidden from and inaccessible to non-members, including
+  -- admins (no list, no view, no auto-join). Public channels (default) keep the
+  -- legacy behavior where admins see all and auto-join on access.
+  is_private BOOLEAN NOT NULL DEFAULT false,
   created_by INTEGER REFERENCES users(id),
   is_archived BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

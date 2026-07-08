@@ -7,7 +7,7 @@ import { useAuth } from '@/context/AuthContext.jsx'
 import api from '@/lib/axios.js'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Radio, Hash, Check, Terminal, Plus } from 'lucide-react'
+import { Radio, Hash, Lock, Check, Terminal, Plus } from 'lucide-react'
 import { SystematicsMark } from './Login.jsx'
 
 export default function ConnectPage() {
@@ -20,6 +20,7 @@ export default function ConnectPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
+  const [newPrivate, setNewPrivate] = useState(false)
   const [creating, setCreating] = useState(false)
   const [siwsEnabled, setSiwsEnabled] = useState(false)
 
@@ -75,6 +76,7 @@ export default function ConnectPage() {
       const res = await api.post('/api/channels', {
         name: newName.trim(),
         description: newDesc.trim() || null,
+        is_private: newPrivate,
       })
       const newChannel = res.data
       queryClient.invalidateQueries({ queryKey: ['channels'] })
@@ -82,7 +84,8 @@ export default function ConnectPage() {
       setShowCreate(false)
       setNewName('')
       setNewDesc('')
-      toast.success(`#${newChannel.name} created`)
+      setNewPrivate(false)
+      toast.success(`${newChannel.is_private ? 'Private channel ' : ''}#${newChannel.name} created`)
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to create channel')
     } finally {
@@ -204,6 +207,16 @@ export default function ConnectPage() {
                   placeholder="Description (optional)"
                   className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
                 />
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={newPrivate}
+                    onChange={(e) => setNewPrivate(e.target.checked)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span>Private (only invited members can see or access it)</span>
+                </label>
                 <div className="flex gap-2">
                   <Button type="submit" size="sm" disabled={!newName.trim() || creating}>
                     {creating ? 'Creating...' : 'Create'}

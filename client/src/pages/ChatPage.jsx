@@ -10,7 +10,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Send, Hash, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone } from 'lucide-react'
+import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone } from 'lucide-react'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -314,12 +314,21 @@ export default function ChatPage() {
   }, [allMessages.length])
 
   const handleSend = (e) => {
-    e.preventDefault()
+    e?.preventDefault?.()
     if (!input.trim()) return
     sendMessage(input.trim())
     setInput('')
     setMention(null)
   }
+
+  // Auto-grow the composer textarea with its content, up to a max height (then it
+  // scrolls internally). Runs on every input change, incl. clearing after send.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+  }, [input])
 
   // --- @-mention autocomplete ---
   // Detect an active "@query" token ending at the caret and return matching sessions.
@@ -367,21 +376,28 @@ export default function ChatPage() {
   }
 
   const handleComposerKeyDown = (e) => {
-    if (!mention) return
     if (e.nativeEvent?.isComposing) return // don't hijack keys mid IME composition
-    if (e.key === 'ArrowDown') {
+    if (mention) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMention((m) => m && { ...m, index: (m.index + 1) % m.matches.length })
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMention((m) => m && { ...m, index: (m.index - 1 + m.matches.length) % m.matches.length })
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        // Take the highlighted session instead of submitting the message
+        e.preventDefault()
+        insertMention(mention.matches[mention.index])
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setMention(null)
+      }
+      return
+    }
+    // No mention menu open: Enter sends, Shift+Enter inserts a newline (textarea default).
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      setMention((m) => m && { ...m, index: (m.index + 1) % m.matches.length })
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setMention((m) => m && { ...m, index: (m.index - 1 + m.matches.length) % m.matches.length })
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      // Take the highlighted session instead of submitting the message
-      e.preventDefault()
-      insertMention(mention.matches[mention.index])
-    } else if (e.key === 'Escape') {
-      e.preventDefault()
-      setMention(null)
+      handleSend(e)
     }
   }
 
@@ -486,7 +502,9 @@ export default function ChatPage() {
                 String(ch.id) === String(channelId) && 'bg-accent font-medium',
               )}
             >
-              <Hash className="h-4 w-4 shrink-0 text-muted-foreground" />
+              {ch.is_private
+                ? <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
+                : <Hash className="h-4 w-4 shrink-0 text-muted-foreground" />}
               <span className="truncate">{ch.name}</span>
             </button>
           ))}
@@ -502,7 +520,9 @@ export default function ChatPage() {
           {/* Channel header */}
           <div className="flex items-center justify-between px-4 h-14 border-b shrink-0">
             <div className="flex items-center gap-2 min-w-0">
-              <Hash className="h-5 w-5 text-muted-foreground shrink-0" />
+              {channelDetails?.is_private
+                ? <Lock className="h-5 w-5 text-muted-foreground shrink-0" />
+                : <Hash className="h-5 w-5 text-muted-foreground shrink-0" />}
               {editingChannel ? (
                 <div className="flex items-center gap-1.5 min-w-0">
                   <input
@@ -784,18 +804,18 @@ export default function ChatPage() {
                   ))}
                 </div>
               )}
-              <form onSubmit={handleSend} className="flex gap-2">
-                <input
+              <form onSubmit={handleSend} className="flex items-end gap-2">
+                <textarea
                   ref={inputRef}
-                  type="text"
+                  rows={1}
                   value={input}
                   onChange={handleComposerChange}
                   onKeyDown={handleComposerKeyDown}
                   onBlur={() => setMention(null)}
-                  placeholder={`Message #${channelDetails?.name || ''}...`}
-                  className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder={`Message #${channelDetails?.name || ''}...  (Shift+Enter for a new line)`}
+                  className="flex-1 resize-none max-h-[200px] overflow-y-auto rounded-md border border-input bg-background px-3 py-2 text-sm leading-snug ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
-                <Button type="submit" size="icon" disabled={!input.trim()}>
+                <Button type="submit" size="icon" disabled={!input.trim()} className="shrink-0">
                   <Send className="h-4 w-4" />
                 </Button>
               </form>

@@ -6,7 +6,7 @@ import api from '@/lib/axios.js'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
-import { Plus, Hash, Users, Trash2, UserPlus, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, Hash, Users, Trash2, UserPlus, X, ChevronDown, ChevronUp, Lock, Globe } from 'lucide-react'
 
 export default function ChannelsPage() {
   const queryClient = useQueryClient()
@@ -15,6 +15,7 @@ export default function ChannelsPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [isPrivate, setIsPrivate] = useState(false)
   const [selectedMembers, setSelectedMembers] = useState([])
   const [expandedChannel, setExpandedChannel] = useState(null)
 
@@ -37,9 +38,20 @@ export default function ChannelsPage() {
       setShowCreate(false)
       setName('')
       setDescription('')
+      setIsPrivate(false)
       setSelectedMembers([])
     },
     onError: (err) => toast.error(err.response?.data?.error || 'Failed to create channel'),
+  })
+
+  const setPrivacyMutation = useMutation({
+    mutationFn: ({ channelId, is_private }) => api.put(`/api/channels/${channelId}`, { is_private }),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      queryClient.invalidateQueries({ queryKey: ['channel-details'] })
+      toast.success(vars.is_private ? 'Channel is now private' : 'Channel is now public')
+    },
+    onError: (err) => toast.error(err.response?.data?.error || 'Failed to change privacy'),
   })
 
   const deleteMutation = useMutation({
@@ -91,6 +103,7 @@ export default function ChannelsPage() {
     createMutation.mutate({
       name: name.trim(),
       description: description.trim() || null,
+      is_private: isPrivate,
       member_ids: selectedMembers,
     })
   }
@@ -142,6 +155,41 @@ export default function ChannelsPage() {
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
               />
             </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Visibility</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPrivate(false)}
+                  className={`flex flex-1 items-center gap-2 rounded-md border px-3 py-2 text-sm text-left transition-colors ${
+                    !isPrivate ? 'bg-primary text-primary-foreground border-primary' : 'bg-background hover:bg-accent border-input'
+                  }`}
+                >
+                  <Globe className="h-4 w-4 shrink-0" />
+                  <span>
+                    <span className="font-medium">Public</span>
+                    <span className={`block text-xs ${!isPrivate ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                      Visible to admins; members can read and post
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPrivate(true)}
+                  className={`flex flex-1 items-center gap-2 rounded-md border px-3 py-2 text-sm text-left transition-colors ${
+                    isPrivate ? 'bg-primary text-primary-foreground border-primary' : 'bg-background hover:bg-accent border-input'
+                  }`}
+                >
+                  <Lock className="h-4 w-4 shrink-0" />
+                  <span>
+                    <span className="font-medium">Private</span>
+                    <span className={`block text-xs ${isPrivate ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                      Only invited members can see or access it
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </div>
             {isAdmin && allUsers.length > 0 && (
               <div>
                 <label className="block text-sm font-medium mb-2">Add Members</label>
@@ -183,9 +231,18 @@ export default function ChannelsPage() {
                 className="flex items-center gap-3 text-left flex-1"
                 onClick={() => setExpandedChannel(expandedChannel === ch.id ? null : ch.id)}
               >
-                <Hash className="h-5 w-5 text-muted-foreground" />
+                {ch.is_private
+                  ? <Lock className="h-5 w-5 text-muted-foreground" />
+                  : <Hash className="h-5 w-5 text-muted-foreground" />}
                 <div className="flex-1">
-                  <p className="font-medium">{ch.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium">{ch.name}</p>
+                    {ch.is_private && (
+                      <Badge variant="outline" className="gap-1 text-[10px] py-0">
+                        <Lock className="h-2.5 w-2.5" /> Private
+                      </Badge>
+                    )}
+                  </div>
                   {ch.description && <p className="text-sm text-muted-foreground">{ch.description}</p>}
                 </div>
                 <Badge variant="secondary" className="gap-1">
@@ -211,6 +268,31 @@ export default function ChannelsPage() {
             {/* Expanded: member management */}
             {expandedChannel === ch.id && channelDetails && (
               <div className="px-4 pb-4 space-y-3">
+                {/* Visibility toggle (admin) */}
+                {isAdmin && (
+                  <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      {ch.is_private ? <Lock className="h-4 w-4 text-muted-foreground" /> : <Globe className="h-4 w-4 text-muted-foreground" />}
+                      <div>
+                        <p className="font-medium">{ch.is_private ? 'Private channel' : 'Public channel'}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {ch.is_private
+                            ? 'Only invited members can see or access it.'
+                            : 'Admins can see and auto-join this channel.'}
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={setPrivacyMutation.isPending}
+                      onClick={() => setPrivacyMutation.mutate({ channelId: ch.id, is_private: !ch.is_private })}
+                    >
+                      {ch.is_private ? 'Make public' : 'Make private'}
+                    </Button>
+                  </div>
+                )}
+
                 {/* Current members */}
                 <div className="space-y-1">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Members</p>

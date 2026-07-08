@@ -6,18 +6,22 @@ const { broadcastToChannel } = require('../ws/index');
 
 /**
  * GET /api/channels - List channels
- * Admins see all channels. Regular users see only channels they belong to.
+ * Admins see all public channels plus any private channels they belong to.
+ * Regular users see only channels they belong to.
  */
 router.get('/', async (req, res) => {
   try {
     let result;
     if (req.user.role === 'admin') {
+      // Private channels are hidden even from admins unless they are a member.
       result = await pool.query(
         `SELECT c.*,
           (SELECT COUNT(*) FROM channel_members WHERE channel_id = c.id) as member_count,
           (SELECT role FROM channel_members WHERE channel_id = c.id AND user_id = $1) as member_role
          FROM channels c
          WHERE c.is_archived = false
+           AND (c.is_private = false
+                OR EXISTS (SELECT 1 FROM channel_members WHERE channel_id = c.id AND user_id = $1))
          ORDER BY c.created_at DESC`,
         [req.user.id]
       );
@@ -44,14 +48,14 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { name, description, member_ids } = req.body;
+    const { name, description, member_ids, is_private } = req.body;
     if (!name) return res.status(400).json({ error: 'name is required' });
 
     await client.query('BEGIN');
 
     const channelResult = await client.query(
-      'INSERT INTO channels (name, description, created_by) VALUES ($1, $2, $3) RETURNING *',
-      [name, description || null, req.user.id]
+      'INSERT INTO channels (name, description, created_by, is_private) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, description || null, req.user.id, is_private === true]
     );
     const channel = channelResult.rows[0];
 
@@ -97,8 +101,9 @@ router.get('/:id', async (req, res) => {
       [req.params.id, req.user.id]
     );
     if (memberCheck.rows.length === 0) {
-      if (req.user.role === 'admin') {
-        // Admins auto-join any channel they view
+      // Admins auto-join any PUBLIC channel they view; private channels are
+      // invite-only and inaccessible even to admins who are not members.
+      if (req.user.role === 'admin' && !channelResult.rows[0].is_private) {
         await pool.query(
           'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [req.params.id, req.user.id, 'admin']
@@ -150,13 +155,15 @@ router.put('/:id/instructions', async (req, res) => {
       return res.status(400).json({ error: 'Instructions too long (max 10000 characters)' });
     }
 
-    // Verify membership (admins auto-join)
+    // Verify membership (admins auto-join public channels only)
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [req.params.id, req.user.id]
     );
     if (memberCheck.rows.length === 0) {
-      if (req.user.role === 'admin') {
+      const chRes = await pool.query('SELECT is_private FROM channels WHERE id = $1', [req.params.id]);
+      if (chRes.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+      if (req.user.role === 'admin' && !chRes.rows[0].is_private) {
         await pool.query(
           'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [req.params.id, req.user.id, 'admin']
@@ -198,13 +205,15 @@ router.put('/:id/mode', async (req, res) => {
       return res.status(400).json({ error: "delivery_mode must be 'broadcast' or 'mention'" });
     }
 
-    // Verify membership (admins auto-join)
+    // Verify membership (admins auto-join public channels only)
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [req.params.id, req.user.id]
     );
     if (memberCheck.rows.length === 0) {
-      if (req.user.role === 'admin') {
+      const chRes = await pool.query('SELECT is_private FROM channels WHERE id = $1', [req.params.id]);
+      if (chRes.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+      if (req.user.role === 'admin' && !chRes.rows[0].is_private) {
         await pool.query(
           'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [req.params.id, req.user.id, 'admin']
@@ -241,12 +250,13 @@ router.put('/:id/mode', async (req, res) => {
  */
 router.put('/:id', async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, is_private } = req.body;
 
     const hasName = name !== undefined;
     const hasDescription = description !== undefined;
-    if (!hasName && !hasDescription) {
-      return res.status(400).json({ error: 'Provide name and/or description' });
+    const hasPrivate = is_private !== undefined;
+    if (!hasName && !hasDescription && !hasPrivate) {
+      return res.status(400).json({ error: 'Provide name, description, and/or is_private' });
     }
     if (hasName) {
       if (typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 100) {
@@ -257,6 +267,9 @@ router.put('/:id', async (req, res) => {
       if (!(description === null || (typeof description === 'string' && description.length <= 500))) {
         return res.status(400).json({ error: 'description must be a string (max 500 characters) or null' });
       }
+    }
+    if (hasPrivate && typeof is_private !== 'boolean') {
+      return res.status(400).json({ error: 'is_private must be a boolean' });
     }
 
     // Owner/admin gate: channel admin OR global admin
@@ -279,11 +292,15 @@ router.put('/:id', async (req, res) => {
       updates.push(`description = $${paramIndex++}`);
       values.push(description === null ? null : (description.trim() || null));
     }
+    if (hasPrivate) {
+      updates.push(`is_private = $${paramIndex++}`);
+      values.push(is_private);
+    }
     updates.push('updated_at = NOW()');
     values.push(req.params.id);
 
     const result = await pool.query(
-      `UPDATE channels SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, description`,
+      `UPDATE channels SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, description, is_private`,
       values
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
@@ -294,10 +311,11 @@ router.put('/:id', async (req, res) => {
       channel_id: Number(req.params.id),
       name: row.name,
       description: row.description,
+      is_private: row.is_private,
       updated_by: req.user.name,
     });
 
-    res.json({ id: row.id, name: row.name, description: row.description });
+    res.json({ id: row.id, name: row.name, description: row.description, is_private: row.is_private });
   } catch (err) {
     console.error('[channels]', err); res.status(500).json({ error: 'Internal server error' });
   }

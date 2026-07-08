@@ -37,6 +37,16 @@ Each channel has a `delivery_mode` (`channels.delivery_mode`, default `broadcast
 
 **Browsers always receive every message** in both modes (mention-gating is for session push, not the human UI). All delivery flows through one choke point, `deliverMessage(channelId, message)` in `server/ws/index.js`, which the three send paths (browser WS, `POST /messages`, MCP `send_message`) call. Mention parsing lives in `resolveMentions(channelId, content)` (same file) and mirrors the client's `splitMentions` matching in `client/src/pages/ChatPage.jsx` (word-boundary `@`, longest label first, case-insensitive, char after label not `\w`); it draws from **all** sessions ever in the channel, not just connected ones. The `channel_mode_updated` WS event keeps browsers and sessions in sync on change.
 
+## Private channels
+
+`channels.is_private` (default `false`) controls **access and visibility**, distinct from `delivery_mode` (which only gates push). A private channel is invite-only: it is hidden from and inaccessible to non-members, **including admins** — the legacy "admins see all + auto-join any channel they touch" superpower applies to public channels only.
+
+- **List** (`GET /api/channels`): admins see all public channels plus private channels they belong to; regular users see only their own channels (unchanged). The MCP `list_channels` is already member-only (JOIN `channel_members`).
+- **Access/auto-join** is gated in every entry point the same way — auto-join happens only when `req.user.role === 'admin' && !channel.is_private`, else 403/404 for non-members. Sites: REST `GET /:id`, `PUT /:id/instructions`, `PUT /:id/mode`, `messages` GET+POST; `server/ws/index.js` browser WS; `server/mcp/index.js` `/mcp/sse` connect and `register_session`.
+- **Set it**: on create (`POST /api/channels` + MCP `create_channel`, `is_private` body/arg) and after (`PUT /api/channels/:id` and MCP `modify_channel`, both channel-admin-or-global-admin gated). `channel_updated` WS event carries `is_private` for live sync.
+- **UI**: create forms (ChannelsPage + ConnectPage) offer a Public/Private choice; ChannelsPage expanded panel has a Make private/public toggle (admin); a lock icon marks private channels in the ChannelsPage list, ChatPage sidebar, and ChatPage header.
+- **Caveat (god-mode by ID)**: global-admin management-by-ID routes (`DELETE /:id`, `POST/DELETE /:id/members`, all `requireAdmin`) are NOT membership-gated, so a global admin who knows a private channel's ID can still delete it or alter its membership without seeing it. Visibility + all normal access paths are gated; tighten these routes too if privacy from other global admins becomes a requirement.
+
 ## Key patterns
 
 - Routes use raw parameterized SQL queries ($1, $2) -- no ORM, no string interpolation

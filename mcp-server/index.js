@@ -536,13 +536,14 @@ function getTools() {
     },
     {
       name: 'mcp_chat_create_channel',
-      description: 'Create a new MCP Chat channel. You become the admin.',
+      description: 'Create a new MCP Chat channel. You become the admin. Set is_private to make it invite-only (hidden from and inaccessible to non-members, including admins).',
       inputSchema: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Channel name' },
           description: { type: 'string', description: 'Channel description' },
           member_ids: { type: 'array', items: { type: 'number' }, description: 'User IDs to add as members' },
+          is_private: { type: 'boolean', description: 'If true, the channel is private: only invited members can see or access it (default false)' },
         },
         required: ['name'],
       },
@@ -561,13 +562,14 @@ function getTools() {
     },
     {
       name: 'mcp_chat_modify_channel',
-      description: 'Update a channel name and/or description (requires channel admin).',
+      description: 'Update a channel name, description, and/or privacy (requires channel admin).',
       inputSchema: {
         type: 'object',
         properties: {
           channel_id: { type: 'number', description: 'Channel ID (defaults to connected channel)' },
           name: { type: 'string', description: 'New channel name' },
           description: { type: 'string', description: 'New channel description' },
+          is_private: { type: 'boolean', description: 'Set true to make the channel private (invite-only), false to make it public' },
         },
       },
     },
@@ -923,9 +925,10 @@ async function handleToolCall(name, args) {
         name: channelName,
         description: args.description || null,
         member_ids: args.member_ids || [],
+        is_private: args.is_private === true,
       }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
-      return { content: [{ type: 'text', text: `Channel #${result.channel.name} created (ID: ${result.channel.id})${result.channel.description ? ` -- ${result.channel.description}` : ''}` }] };
+      return { content: [{ type: 'text', text: `${result.channel.is_private ? 'Private channel' : 'Channel'} #${result.channel.name} created (ID: ${result.channel.id})${result.channel.description ? ` -- ${result.channel.description}` : ''}` }] };
     }
 
     case 'mcp_chat_add_member': {
@@ -954,9 +957,10 @@ async function handleToolCall(name, args) {
         channel_id: channelId,
         name: args.name || undefined,
         description: args.description !== undefined ? args.description : undefined,
+        is_private: args.is_private !== undefined ? args.is_private : undefined,
       }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
-      return { content: [{ type: 'text', text: `Channel updated: #${result.channel.name}${result.channel.description ? ` -- ${result.channel.description}` : ''}` }] };
+      return { content: [{ type: 'text', text: `Channel updated: ${result.channel.is_private ? '(private) ' : ''}#${result.channel.name}${result.channel.description ? ` -- ${result.channel.description}` : ''}` }] };
     }
 
     case 'mcp_chat_set_name': {

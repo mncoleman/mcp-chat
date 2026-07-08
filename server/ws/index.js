@@ -30,19 +30,20 @@ function setupWebSocket(server) {
     }
 
     // Verify channel exists
-    const channelCheck = await pool.query('SELECT 1 FROM channels WHERE id = $1', [channelId]);
+    const channelCheck = await pool.query('SELECT is_private FROM channels WHERE id = $1', [channelId]);
     if (channelCheck.rows.length === 0) {
       ws.close(4003, 'Channel not found');
       return;
     }
 
-    // Verify channel membership (admins auto-join if not already a member)
+    // Verify channel membership (admins auto-join public channels only; private
+    // channels are invite-only and inaccessible even to admins who aren't members).
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [channelId, user.id]
     );
     if (memberCheck.rows.length === 0) {
-      if (user.role === 'admin') {
+      if (user.role === 'admin' && !channelCheck.rows[0].is_private) {
         await pool.query(
           'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [channelId, user.id, 'admin']

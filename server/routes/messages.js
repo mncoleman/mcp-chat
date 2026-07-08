@@ -9,16 +9,17 @@ const { deliverMessage } = require('../ws/index');
 router.get('/:channelId/messages', async (req, res) => {
   try {
     // Verify channel exists
-    const channelExists = await pool.query('SELECT 1 FROM channels WHERE id = $1', [req.params.channelId]);
+    const channelExists = await pool.query('SELECT is_private FROM channels WHERE id = $1', [req.params.channelId]);
     if (channelExists.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
 
-    // Verify membership (admins auto-join)
+    // Verify membership (admins auto-join public channels only; private channels
+    // are invite-only and inaccessible even to admins who are not members).
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [req.params.channelId, req.user.id]
     );
     if (memberCheck.rows.length === 0) {
-      if (req.user.role === 'admin') {
+      if (req.user.role === 'admin' && !channelExists.rows[0].is_private) {
         await pool.query(
           'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [req.params.channelId, req.user.id, 'admin']
@@ -59,16 +60,17 @@ router.get('/:channelId/messages', async (req, res) => {
 router.post('/:channelId/messages', async (req, res) => {
   try {
     // Verify channel exists
-    const channelExists = await pool.query('SELECT 1 FROM channels WHERE id = $1', [req.params.channelId]);
+    const channelExists = await pool.query('SELECT is_private FROM channels WHERE id = $1', [req.params.channelId]);
     if (channelExists.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
 
-    // Verify membership (admins auto-join)
+    // Verify membership (admins auto-join public channels only; private channels
+    // are invite-only and inaccessible even to admins who are not members).
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [req.params.channelId, req.user.id]
     );
     if (memberCheck.rows.length === 0) {
-      if (req.user.role === 'admin') {
+      if (req.user.role === 'admin' && !channelExists.rows[0].is_private) {
         await pool.query(
           'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [req.params.channelId, req.user.id, 'admin']

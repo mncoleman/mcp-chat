@@ -32,13 +32,16 @@ function setupMcpRoutes(app) {
 
     const channelId = channel;
 
-    // Verify membership (admins auto-join if not already a member)
+    // Verify membership (admins auto-join public channels only; private channels
+    // are invite-only and inaccessible even to admins who are not members).
     const memberCheck = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
       [channelId, user.id]
     );
     if (memberCheck.rows.length === 0) {
-      if (user.role === 'admin') {
+      const chRes = await pool.query('SELECT is_private FROM channels WHERE id = $1', [channelId]);
+      if (chRes.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+      if (user.role === 'admin' && !chRes.rows[0].is_private) {
         await pool.query(
           'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [channelId, user.id, 'admin']
@@ -180,7 +183,7 @@ function setupMcpRoutes(app) {
 
         case 'list_channels': {
           const result = await pool.query(
-            `SELECT c.id, c.name, c.description, c.instructions, c.delivery_mode
+            `SELECT c.id, c.name, c.description, c.instructions, c.delivery_mode, c.is_private
              FROM channels c
              JOIN channel_members cm ON cm.channel_id = c.id AND cm.user_id = $1
              WHERE c.is_archived = false`,
@@ -241,13 +244,16 @@ function setupMcpRoutes(app) {
             return res.json({ error: 'channel_id and session_token are required' });
           }
 
-          // Verify channel membership (admins auto-join)
+          // Verify channel membership (admins auto-join public channels only;
+          // private channels are invite-only, inaccessible even to admins).
           const regMemberCheck = await pool.query(
             'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
             [channel_id, user.id]
           );
           if (regMemberCheck.rows.length === 0) {
-            if (user.role === 'admin') {
+            const chRes = await pool.query('SELECT is_private FROM channels WHERE id = $1', [channel_id]);
+            if (chRes.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+            if (user.role === 'admin' && !chRes.rows[0].is_private) {
               await pool.query(
                 'INSERT INTO channel_members (channel_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
                 [channel_id, user.id, 'admin']
@@ -398,7 +404,7 @@ function setupMcpRoutes(app) {
         }
 
         case 'create_channel': {
-          const { name, description, member_ids } = args;
+          const { name, description, member_ids, is_private } = args;
           if (!name || typeof name !== 'string' || !name.trim()) {
             return res.json({ error: 'name is required' });
           }
@@ -408,8 +414,8 @@ function setupMcpRoutes(app) {
             await client.query('BEGIN');
 
             const channelResult = await client.query(
-              'INSERT INTO channels (name, description, created_by) VALUES ($1, $2, $3) RETURNING *',
-              [name.trim(), description || null, user.id]
+              'INSERT INTO channels (name, description, created_by, is_private) VALUES ($1, $2, $3, $4) RETURNING *',
+              [name.trim(), description || null, user.id, is_private === true]
             );
             const channel = channelResult.rows[0];
 
@@ -432,7 +438,7 @@ function setupMcpRoutes(app) {
             }
 
             await client.query('COMMIT');
-            return res.json({ success: true, channel: { id: channel.id, name: channel.name, description: channel.description } });
+            return res.json({ success: true, channel: { id: channel.id, name: channel.name, description: channel.description, is_private: channel.is_private } });
           } catch (err) {
             await client.query('ROLLBACK');
             throw err;
@@ -476,12 +482,13 @@ function setupMcpRoutes(app) {
         }
 
         case 'modify_channel': {
-          const { channel_id, name, description } = args;
+          const { channel_id, name, description, is_private } = args;
           if (!channel_id) return res.json({ error: 'channel_id is required' });
 
           const hasName = name !== undefined;
           const hasDescription = description !== undefined;
-          if (!hasName && !hasDescription) return res.json({ error: 'Provide name and/or description to update' });
+          const hasPrivate = is_private !== undefined;
+          if (!hasName && !hasDescription && !hasPrivate) return res.json({ error: 'Provide name, description, and/or is_private to update' });
 
           // Validate (mirror REST PUT /api/channels/:id): name is a non-empty
           // string <=100 chars when provided; description is null or a string <=500.
@@ -494,6 +501,9 @@ function setupMcpRoutes(app) {
             if (!(description === null || (typeof description === 'string' && description.length <= 500))) {
               return res.json({ error: 'description must be a string (max 500 characters) or null' });
             }
+          }
+          if (hasPrivate && typeof is_private !== 'boolean') {
+            return res.json({ error: 'is_private must be a boolean' });
           }
 
           // Owner/admin gate: caller is a channel admin OR a global admin
@@ -517,11 +527,15 @@ function setupMcpRoutes(app) {
             updates.push(`description = $${paramIndex++}`);
             values.push(description === null ? null : (description.trim() || null));
           }
+          if (hasPrivate) {
+            updates.push(`is_private = $${paramIndex++}`);
+            values.push(is_private);
+          }
           updates.push(`updated_at = NOW()`);
           values.push(channel_id);
 
           const result = await pool.query(
-            `UPDATE channels SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, description`,
+            `UPDATE channels SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, description, is_private`,
             values
           );
           if (result.rows.length === 0) return res.json({ error: 'Channel not found' });
@@ -531,6 +545,7 @@ function setupMcpRoutes(app) {
             channel_id: Number(channel_id),
             name: result.rows[0].name,
             description: result.rows[0].description,
+            is_private: result.rows[0].is_private,
             updated_by: user.name,
           });
 
@@ -598,13 +613,14 @@ function setupMcpRoutes(app) {
         },
         {
           name: 'create_channel',
-          description: 'Create a new channel. You become the admin. Optionally add members by user ID.',
+          description: 'Create a new channel. You become the admin. Optionally add members by user ID. Set is_private to make it invite-only (hidden from and inaccessible to non-members, including admins).',
           inputSchema: {
             type: 'object',
             properties: {
               name: { type: 'string', description: 'Channel name' },
               description: { type: 'string', description: 'Channel description' },
               member_ids: { type: 'array', items: { type: 'number' }, description: 'User IDs to add as members' },
+              is_private: { type: 'boolean', description: 'If true, the channel is private: only invited members can see or access it (default false)' },
             },
             required: ['name'],
           },
@@ -624,13 +640,14 @@ function setupMcpRoutes(app) {
         },
         {
           name: 'modify_channel',
-          description: 'Update a channel name and/or description (requires channel admin).',
+          description: 'Update a channel name, description, and/or privacy (requires channel admin).',
           inputSchema: {
             type: 'object',
             properties: {
               channel_id: { type: 'number', description: 'Channel ID' },
               name: { type: 'string', description: 'New channel name' },
               description: { type: 'string', description: 'New channel description' },
+              is_private: { type: 'boolean', description: 'Set true to make the channel private (invite-only), false to make it public' },
             },
             required: ['channel_id'],
           },
