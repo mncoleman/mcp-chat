@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { v4: uuidv4 } = require('uuid');
 const { broadcastToChannel } = require('../ws/index');
+const { withChannelLabelLock, resolveLabel } = require('../lib/session-labels');
 
 // Throttle per-session context-% writes: at most one DB write / broadcast per
 // CONTEXT_MIN_INTERVAL_MS per session_token (the status-line wrapper may fire on
@@ -98,8 +99,17 @@ router.patch('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Not a member of this channel' });
     }
 
-    const newLabel = label.trim();
-    await pool.query('UPDATE sessions SET label = $1 WHERE id = $2', [newLabel, session.id]);
+    // Same per-channel uniqueness rule the MCP paths use -- a rename from the
+    // browser sidebar must not be able to recreate a label collision either.
+    const newLabel = await withChannelLabelLock(session.channel_id, async (client) => {
+      const resolved = await resolveLabel(client, {
+        channelId: session.channel_id,
+        requested: label,
+        excludeToken: session.session_token,
+      });
+      await client.query('UPDATE sessions SET label = $1 WHERE id = $2', [resolved.label, session.id]);
+      return resolved.label;
+    });
 
     broadcastToChannel(String(session.channel_id), {
       type: 'session_renamed',

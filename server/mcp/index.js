@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const pool = require('../db/pool');
 const { JWT_SECRET } = require('../middleware/auth');
 const { broadcastToChannel, deliverMessage, resolveMentions } = require('../ws/index');
+const { withChannelLabelLock, resolveLabel } = require('../lib/session-labels');
 
 /**
  * MCP Server endpoint using SSE for server-to-client push
@@ -263,25 +264,24 @@ function setupMcpRoutes(app) {
             }
           }
 
-          // Use custom label if provided, otherwise assign sequential number
-          let label = args.label;
-          let sessionNumber = null;
-          if (!label) {
-            const activeResult = await pool.query(
-              'SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND channel_id = $2 AND is_connected = true',
-              [user.id, channel_id]
+          // Allocate the label and write the session in one locked transaction, so
+          // two sessions joining the same channel at once cannot land on the same
+          // label. A requested label is honored when free and suffixed when taken,
+          // so the caller must use the label returned below, not the one it asked for.
+          const label = await withChannelLabelLock(channel_id, async (client) => {
+            const resolved = await resolveLabel(client, {
+              channelId: channel_id,
+              requested: args.label,
+              excludeToken: session_token,
+            });
+            await client.query(
+              `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
+               VALUES ($1, $2, $3, $4, true, NOW())
+               ON CONFLICT (session_token) DO UPDATE SET is_connected = true, connected_at = NOW(), label = $4`,
+              [session_token, user.id, channel_id, resolved.label]
             );
-            sessionNumber = parseInt(activeResult.rows[0].count) + 1;
-            label = `Session ${sessionNumber}`;
-          }
-
-          // Upsert the session record
-          await pool.query(
-            `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
-             VALUES ($1, $2, $3, $4, true, NOW())
-             ON CONFLICT (session_token) DO UPDATE SET is_connected = true, connected_at = NOW(), label = $4`,
-            [session_token, user.id, channel_id, label]
-          );
+            return resolved.label;
+          });
 
           // Broadcast so browsers refresh the active-session list and reflect the label
           broadcastToChannel(String(channel_id), {
@@ -296,9 +296,13 @@ function setupMcpRoutes(app) {
             [channel_id]
           );
 
+          // Kept for wire compatibility with older clients; null when the label is
+          // not an auto-assigned "Session N". Nothing in this repo reads it.
+          const autoNumber = /^Session (\d+)$/.exec(label);
+
           return res.json({
             label,
-            session_number: sessionNumber,
+            session_number: autoNumber ? parseInt(autoNumber[1], 10) : null,
             session_token,
             channel_name: channelInfo.rows[0]?.name || null,
             instructions: channelInfo.rows[0]?.instructions || null,
@@ -323,8 +327,17 @@ function setupMcpRoutes(app) {
             return res.status(403).json({ error: 'You can only rename your own session' });
           }
 
-          const newLabel = label.trim();
-          await pool.query('UPDATE sessions SET label = $1 WHERE session_token = $2', [newLabel, session_token]);
+          // Same uniqueness rule as register_session -- a rename must not be able to
+          // recreate a collision the allocator just prevented.
+          const newLabel = await withChannelLabelLock(sessRes.rows[0].channel_id, async (client) => {
+            const resolved = await resolveLabel(client, {
+              channelId: sessRes.rows[0].channel_id,
+              requested: label,
+              excludeToken: session_token,
+            });
+            await client.query('UPDATE sessions SET label = $1 WHERE session_token = $2', [resolved.label, session_token]);
+            return resolved.label;
+          });
 
           broadcastToChannel(String(sessRes.rows[0].channel_id), {
             type: 'session_renamed',

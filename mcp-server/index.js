@@ -250,6 +250,9 @@ function connectWebSocket() {
         if (data.session_token !== sessionState.sessionToken) return;
         if (data.label === sessionState.sessionLabel) return;
         sessionState.sessionLabel = data.label;
+        // A human naming this session from the browser is a chosen name too, so it
+        // carries into the next channel exactly like mcp_chat_set_name.
+        sessionState.labelIsCustom = true;
         pushChannelMessage('mcp-chat', `This session has been named "${data.label}". Refer to yourself as "${data.label}" in #${sessionState.channelName}.`, {
           channel: sessionState.channelName,
           event: 'session_renamed',
@@ -401,6 +404,11 @@ let sessionState = {
   userId: null,
   sessionToken: null,
   sessionLabel: null,
+  // True once this session's name was actually CHOSEN -- passed as a label arg,
+  // set via mcp_chat_set_name, or given by a human from the browser sidebar. Only
+  // a chosen name is carried into the next channel on join; an auto-assigned
+  // "Session N" is meaningless outside the channel that assigned it.
+  labelIsCustom: false,
   sessionInstructions: null,
   deliveryMode: 'broadcast',
   connected: false,
@@ -435,6 +443,7 @@ if (envToken && envChannel) {
     userId,
     sessionToken,
     sessionLabel: null,
+    labelIsCustom: Boolean(process.env.MCP_CHAT_SESSION_NAME),
     sessionInstructions: null,
     deliveryMode: 'broadcast',
     connected: true,
@@ -499,11 +508,12 @@ function getTools() {
     },
     {
       name: 'mcp_chat_read',
-      description: 'Read recent messages from your connected MCP Chat channel.',
+      description: 'Read recent messages from an MCP Chat channel. Defaults to your connected channel; pass channel_id to read any other channel you are a member of without joining it (this does not switch your connection).',
       inputSchema: {
         type: 'object',
         properties: {
           limit: { type: 'number', description: 'Number of messages to fetch (default: 20, max: 100)' },
+          channel_id: { type: 'number', description: 'Channel ID to read (defaults to your connected channel). Must be a channel you are a member of.' },
         },
       },
     },
@@ -698,7 +708,71 @@ ${scriptBlock}
 `;
 }
 
+/**
+ * Resolve which channel a tool should act on.
+ *
+ * No channel_id means the connected channel. An explicit channel_id is looked up
+ * in the caller's channel list, so a channel that does not exist -- or that this
+ * user is not a member of -- is an error rather than a silent fallback to the
+ * connected channel. Membership is enforced server-side regardless (get_messages
+ * 403s a non-member); this lookup exists to give a useful message and the name.
+ *
+ * Returns { id, name } or { error }.
+ */
+async function resolveChannel(channelIdArg) {
+  if (channelIdArg === undefined || channelIdArg === null || channelIdArg === '') {
+    if (!sessionState.connected) {
+      return { error: 'Not connected. Run mcp_chat_connect first, or pass channel_id to read a specific channel.' };
+    }
+    return { id: sessionState.channelId, name: sessionState.channelName };
+  }
+
+  const channelId = parseInt(channelIdArg, 10);
+  if (!channelId || isNaN(channelId)) {
+    return { error: 'Valid channel_id is required.' };
+  }
+  if (channelId === sessionState.channelId && sessionState.channelName) {
+    return { id: channelId, name: sessionState.channelName }; // already resolved; skip the roundtrip
+  }
+  if (!sessionState.token) {
+    return { error: 'Not authenticated. Run mcp_chat_connect first.' };
+  }
+
+  const channelsResult = await apiCall('list_channels', {}, sessionState.token);
+  const channel = channelsResult.channels?.find(c => c.id === channelId);
+  if (!channel) {
+    return { error: `Channel ${channelId} not found or you are not a member.` };
+  }
+  return { id: channel.id, name: channel.name };
+}
+
+/**
+ * Reject argument keys a tool does not declare.
+ *
+ * Without this, an undeclared argument is silently dropped and the tool answers
+ * about something else -- a caller asking for channel 688 got channel 693's
+ * messages presented as the answer, with no indication anything was discarded.
+ * A wrong answer that looks like a right one is worse than an error.
+ */
+function validateToolArgs(name, args) {
+  const tool = getTools().find(t => t.name === name);
+  if (!tool) return null;
+  const allowed = Object.keys(tool.inputSchema?.properties || {});
+  const unknown = Object.keys(args || {}).filter(k => !allowed.includes(k));
+  if (unknown.length === 0) return null;
+  const accepted = allowed.length ? allowed.join(', ') : 'none';
+  // Also to stderr: if a host ever injects a key of its own, this is what makes a
+  // spurious rejection diagnosable from a single bug report.
+  process.stderr.write(`[mcp-chat] rejected unknown argument(s) for ${name}: ${unknown.join(', ')}\n`);
+  return `Unknown argument${unknown.length > 1 ? 's' : ''} for ${name}: ${unknown.join(', ')}. Accepted arguments: ${accepted}.`;
+}
+
 async function handleToolCall(name, args) {
+  const argError = validateToolArgs(name, args);
+  if (argError) {
+    return { content: [{ type: 'text', text: argError }], isError: true };
+  }
+
   switch (name) {
     case 'mcp_chat_connect': {
       try {
@@ -723,6 +797,7 @@ async function handleToolCall(name, args) {
           userId,
           sessionToken,
           sessionLabel: null,
+          labelIsCustom: Boolean(args.label),
           sessionInstructions: null,
           deliveryMode: 'broadcast',
           connected: true,
@@ -787,6 +862,14 @@ async function handleToolCall(name, args) {
           return { content: [{ type: 'text', text: `Channel ${channelId} not found or you are not a member.` }], isError: true };
         }
 
+        // A name this session actually chose follows it into the new channel, so one
+        // session keeps one identity across channels instead of picking up a fresh
+        // auto-assigned number in each. An explicit label arg still wins. An
+        // auto-assigned "Session N" is deliberately NOT carried: it names a slot in
+        // the channel that issued it, not this session.
+        const carriedLabel = sessionState.labelIsCustom ? sessionState.sessionLabel : null;
+        const requestedLabel = args.label || carriedLabel || undefined;
+
         disconnectWebSocket();
         const sessionToken = `mcp-${crypto.randomBytes(16).toString('hex')}`;
         sessionState = {
@@ -795,18 +878,22 @@ async function handleToolCall(name, args) {
           channelName: channel.name,
           sessionToken,
           sessionLabel: null,
+          labelIsCustom: Boolean(requestedLabel),
           sessionInstructions: null,
           deliveryMode: channel.delivery_mode || 'broadcast',
           connected: true,
         };
 
-        // Register session to get label (custom or sequential) + channel instructions
-        let sessionLabel = args.label || 'Session';
+        // Register session to get label (custom or sequential) + channel instructions.
+        // The server may suffix a requested label that is already taken in the target
+        // channel, so the returned label is authoritative -- never assume we got the
+        // name we asked for.
+        let sessionLabel = requestedLabel || 'Session';
         try {
           const regResult = await apiCall('register_session', {
             channel_id: channelId,
             session_token: sessionToken,
-            label: args.label || undefined,
+            label: requestedLabel,
           }, sessionState.token);
           sessionLabel = regResult.label || sessionLabel;
           sessionState.sessionLabel = sessionLabel;
@@ -851,17 +938,19 @@ async function handleToolCall(name, args) {
     }
 
     case 'mcp_chat_read': {
-      if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
-      }
+      // Reading another channel needs credentials, not a connection -- being
+      // connected is only required when falling back to the connected channel.
+      const target = await resolveChannel(args.channel_id);
+      if (target.error) return { content: [{ type: 'text', text: target.error }], isError: true };
+
       const limit = Math.max(1, Math.min(100, parseInt(args.limit, 10) || 20));
       const result = await apiCall('get_messages', {
-        channel_id: sessionState.channelId,
+        channel_id: target.id,
         limit,
       }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
       if (!result.messages || result.messages.length === 0) {
-        return { content: [{ type: 'text', text: `No messages in #${sessionState.channelName}` }] };
+        return { content: [{ type: 'text', text: `No messages in #${target.name}` }] };
       }
       const formatted = result.messages.map(m => {
         const sender = m.session_id
@@ -869,7 +958,10 @@ async function handleToolCall(name, args) {
           : m.user_name;
         return `[${new Date(m.created_at).toLocaleTimeString()}] ${sender}: ${m.content}`;
       }).join('\n');
-      return { content: [{ type: 'text', text: `Messages in #${sessionState.channelName}:\n${formatted}` }] };
+      const readHeader = target.id === sessionState.channelId
+        ? `Messages in #${target.name}:`
+        : `Messages in #${target.name} (ID: ${target.id}) -- you are still connected to #${sessionState.channelName}:`;
+      return { content: [{ type: 'text', text: `${readHeader}\n${formatted}` }] };
     }
 
     case 'mcp_chat_presence': {
@@ -974,8 +1066,14 @@ async function handleToolCall(name, args) {
         label: newName,
       }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      // The server suffixes a name already taken in this channel, so use what it returned.
       sessionState.sessionLabel = result.label || newName;
-      return { content: [{ type: 'text', text: `Your session is now named "${sessionState.sessionLabel}" in #${sessionState.channelName}. This name appears on every message you send.` }] };
+      sessionState.labelIsCustom = true;
+      let renameText = `Your session is now named "${sessionState.sessionLabel}" in #${sessionState.channelName}. This name appears on every message you send, and it now follows you into any channel you join.`;
+      if (sessionState.sessionLabel !== newName) {
+        renameText += ` (You asked for "${newName}", which another session in this channel already uses.)`;
+      }
+      return { content: [{ type: 'text', text: renameText }] };
     }
 
     case 'mcp_chat_instructions': {
