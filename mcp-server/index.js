@@ -190,10 +190,31 @@ function sendNotification(method, params) {
   process.stdout.write(`${msg}\n`);
 }
 
+/**
+ * Channel notification meta is Record<string, string>. A non-string value makes
+ * Claude Code drop the WHOLE notification with no error anywhere -- v1.5.0
+ * shipped a boolean `mentioned` and every session on that version went silently
+ * deaf until 1f702d9. Coerce rather than throw: a wrong-typed value should cost
+ * a warning on stderr, never the message it was attached to.
+ */
+function normalizeMeta(meta) {
+  const clean = {};
+  for (const [key, value] of Object.entries(meta || {})) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string') {
+      clean[key] = value;
+      continue;
+    }
+    process.stderr.write(`[mcp-chat] notification meta.${key} was ${typeof value}, coerced to string (meta must be all strings)\n`);
+    clean[key] = String(value);
+  }
+  return clean;
+}
+
 function pushChannelMessage(source, content, meta) {
   sendNotification('notifications/claude/channel', {
     content,
-    meta: { source, ...meta },
+    meta: normalizeMeta({ source, ...meta }),
   });
 }
 
@@ -208,6 +229,10 @@ function deliveryModeNotice(label) {
 
 let wsConnection = null;
 let wsReconnectTimeout = null;
+let wsReconnectAttempts = 0;
+// Retries are 5s, 10s, 20s, 40s, 60s... so the 4th failure is roughly a minute
+// of real downtime -- past a blip, worth telling the session about.
+const WS_RECONNECT_WARN_AFTER = 4;
 
 function connectWebSocket() {
   if (!sessionState.connected || !sessionState.token || !sessionState.channelId) return;
@@ -224,7 +249,18 @@ function connectWebSocket() {
   wsConnection = ws;
 
   ws.on('open', () => {
+    // Recovery is worth announcing only when the session was told delivery had
+    // degraded, otherwise every routine blip becomes context noise.
+    const wasDegraded = wsReconnectAttempts >= WS_RECONNECT_WARN_AFTER;
+    wsReconnectAttempts = 0;
+    sessionState.wsAuthFailed = false;
     process.stderr.write(`[mcp-chat] WebSocket connected to #${sessionState.channelName}\n`);
+    if (wasDegraded) {
+      pushChannelMessage('mcp-chat', `Live delivery for #${sessionState.channelName} is back. Anything sent while it was down was not pushed to you -- use mcp_chat_read to catch up.`, {
+        channel: sessionState.channelName,
+        event: 'delivery_restored',
+      });
+    }
   });
 
   ws.on('message', (raw) => {
@@ -295,16 +331,25 @@ function connectWebSocket() {
           delivery_mode: mode,
         });
       } else if (data.type === 'channel_updated') {
-        if (data.name && data.name !== sessionState.channelName) sessionState.channelName = data.name;
-        pushChannelMessage('mcp-chat', `Channel renamed/updated to #${data.name}${data.description ? ` -- ${data.description}` : ''}${data.updated_by ? ` by ${data.updated_by}` : ''}.`, {
-          channel: sessionState.channelName,
-          event: 'channel_updated',
-        });
+        const renamed = data.name && data.name !== sessionState.channelName;
+        if (renamed) sessionState.channelName = data.name;
+        // A rename changes how this session must refer to the channel, so it is
+        // worth a push. A description edit is not. Mentions-only means "do not
+        // interrupt me unless I am addressed", which this was ignoring.
+        if (renamed && sessionState.deliveryMode !== 'mention') {
+          pushChannelMessage('mcp-chat', `Channel renamed to #${data.name}${data.description ? ` -- ${data.description}` : ''}${data.updated_by ? ` by ${data.updated_by}` : ''}.`, {
+            channel: sessionState.channelName,
+            event: 'channel_updated',
+          });
+        }
       } else if (data.type === 'presence') {
-        // Only push presence for Claude Code sessions (have session_token), not browser refreshes
-        if (!data.session_token) return;
-        // Don't push own presence events
-        if (data.user_id === sessionState.userId) return;
+        // Presence is a pull, not a push: who else is connected right now is
+        // rarely actionable, it arrives for every session of every member, and
+        // mcp_chat_presence answers it on demand. Only surface it in broadcast
+        // mode, where the session has asked for everything.
+        if (!data.session_token) return; // browser refreshes are not sessions
+        if (data.user_id === sessionState.userId) return; // never our own
+        if (sessionState.deliveryMode === 'mention') return;
 
         pushChannelMessage('mcp-chat', `${data.user_name} ${data.status} #${sessionState.channelName}`, {
           channel: sessionState.channelName,
@@ -318,9 +363,36 @@ function connectWebSocket() {
     }
   });
 
-  ws.on('close', () => {
-    process.stderr.write(`[mcp-chat] WebSocket disconnected, reconnecting in 5s...\n`);
-    wsReconnectTimeout = setTimeout(connectWebSocket, 5000);
+  ws.on('close', (code) => {
+    // 4001 is the server's invalid-token close. Retrying it is pointless -- the
+    // token will not become valid -- and worse, the session goes on believing it
+    // is connected: sends still fail loudly, but receives fail silently, so a
+    // channel that has gone deaf is indistinguishable from a quiet one. Say so
+    // in Claude's context, which is the only place anyone is actually reading.
+    if (code === 4001 || code === 1008) {
+      sessionState.wsAuthFailed = true;
+      process.stderr.write('[mcp-chat] WebSocket rejected: token expired or revoked. Not retrying.\n');
+      pushChannelMessage('mcp-chat', `Live delivery for #${sessionState.channelName} has STOPPED: the saved MCP Chat token was rejected (expired or revoked). You are no longer being pushed messages, and silence from this channel now means nothing. Run mcp_chat_connect to re-authenticate.`, {
+        channel: sessionState.channelName,
+        event: 'auth_failed',
+      });
+      return;
+    }
+
+    // Back off rather than hammering /ws every 5s forever. Capped so a long
+    // outage still recovers on its own, and announced once when it stops being
+    // a blip, because an unannounced reconnect loop looks exactly like a quiet
+    // channel from inside the session.
+    wsReconnectAttempts += 1;
+    const delay = Math.min(5000 * 2 ** (wsReconnectAttempts - 1), 60000);
+    process.stderr.write(`[mcp-chat] WebSocket disconnected (code ${code}), reconnecting in ${delay / 1000}s (attempt ${wsReconnectAttempts})...\n`);
+    if (wsReconnectAttempts === WS_RECONNECT_WARN_AFTER) {
+      pushChannelMessage('mcp-chat', `Live delivery for #${sessionState.channelName} has been down for several minutes and is still retrying. Messages sent in the meantime are not being pushed to you. Use mcp_chat_read to catch up, and mcp_chat_status to check the connection.`, {
+        channel: sessionState.channelName,
+        event: 'delivery_degraded',
+      });
+    }
+    wsReconnectTimeout = setTimeout(connectWebSocket, delay);
   });
 
   ws.on('error', (err) => {
@@ -425,6 +497,9 @@ let sessionState = {
   sessionInstructions: null,
   deliveryMode: 'broadcast',
   connected: false,
+  // Set when the server closes the socket with 4001: connected, but deaf, and
+  // it will not recover without re-authenticating.
+  wsAuthFailed: false,
 };
 
 // Load saved config on startup
@@ -1100,7 +1175,13 @@ async function handleToolCall(name, args) {
       if (!sessionState.connected) {
         return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_connect or mcp_chat_join to pick a channel.' : 'Not connected. Run mcp_chat_connect to authenticate and select a channel.' }] };
       }
-      const wsStatus = wsConnection?.readyState === 1 ? 'live (receiving messages)' : 'reconnecting...';
+      // Do not report a wedged or rejected socket as "reconnecting" -- that reads
+      // as temporary, and an expired token never recovers on its own.
+      const wsStatus = sessionState.wsAuthFailed
+        ? 'NOT receiving: token rejected (expired or revoked). Run mcp_chat_connect to re-authenticate.'
+        : wsConnection?.readyState === 1
+          ? 'live (receiving messages)'
+          : `not receiving, reconnecting (attempt ${wsReconnectAttempts})`;
       const modeText = sessionState.deliveryMode === 'mention'
         ? `mentions-only (you are pushed only messages that @mention "${sessionState.sessionLabel || 'your session'}"; use mcp_chat_read for the rest)`
         : 'broadcast (you are pushed every message)';

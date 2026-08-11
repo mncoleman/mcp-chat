@@ -6,3 +6,6 @@ nginx.conf
 certbot/
 *.log
 .DS_Store
+
+# Agent worktrees are checkouts of this same repo, never content of it.
+.claude/worktrees/
