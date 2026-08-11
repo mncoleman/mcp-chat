@@ -142,15 +142,27 @@ APP_URL=https://your-domain.com
 ALLOWED_ORIGINS=https://your-domain.com
 ```
 
-Update `nginx.conf` with your domain. Run `./deploy.sh` or `docker-compose up -d`.
+Run `./deploy.sh` or `docker compose up -d app db`.
+
+The bundled `nginx` and `certbot` services are **vestigial** in the Dovito deployment: TLS is terminated by a separate Caddy, and `docker-compose.override.yml` disables both with `profiles: disabled`. CI brings up only `app` and `db`.
 
 ### CI/CD
 
-Optional GitHub Actions workflow at `.github/workflows/deploy.yml`. Requires GitHub secrets:
-- `EC2_HOST` -- server IP
-- `EC2_SSH_KEY` -- SSH private key
+GitHub Actions workflow at `.github/workflows/deploy.yml`. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` (plus `TS_AUTH_KEY`, which is only needed while the target sits behind Tailscale).
 
-Push to main -> GitHub Actions SSH into server -> git pull -> docker build with VITE_GOOGLE_CLIENT_ID and VITE_API_URL build args -> docker-compose up -> prune old images.
+Push to main -> SSH to the deploy host -> `git fetch` + `merge --ff-only` -> assert `HEAD` equals the commit this run is for -> docker build with `VITE_GOOGLE_CLIENT_ID` / `VITE_API_URL` build args -> `docker compose up -d app db` -> prune.
+
+The script runs under `set -euo pipefail` and the FF-only merge and HEAD assertion are load-bearing, not decoration. Without them, the deploy reported success for weeks while rebuilding an old commit: the checkout had diverged from main (the public repo's history was rewritten), `git pull` refused to run, and the script's exit code was the last command's -- a successful `docker image prune`.
+
+### Where it runs
+
+`mcpchat.dovito.com` resolves to **Dovito-Droplet-1** (206.189.230.134), whose Caddy at `/opt/caddy-proxy/Caddyfile` reverse-proxies to the app. DNS lives at InMotion, not DigitalOcean.
+
+The app and database run on **DovitoMCPServer1** (VPC `10.116.0.5`) as of 2026-08-11, migrated off the homeserver (which Caddy reached over Tailscale at `100.66.189.31:4000`). So the cutover switch is one line in that Caddyfile, not a DNS record.
+
+Two things about that file: it is bind-mounted as a **single file**, so an edit that replaces the inode (`sed -i`, most editors) leaves the container reading the old content while `caddy reload` reports success. Write in place (`cat new > Caddyfile`). And `flush_interval -1` under the `reverse_proxy` must survive any edit -- it is what keeps `/mcp/sse` unbuffered.
+
+The app binds to `10.116.0.5:4000`, not `0.0.0.0:4000`, deliberately: Docker's DNAT rules are traversed before ufw's INPUT chain, so a plain `4000:4000` mapping would publish it to the internet regardless of the firewall.
 
 ### npm package
 
