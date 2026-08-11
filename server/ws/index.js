@@ -2,6 +2,8 @@ const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 const { JWT_SECRET } = require('../middleware/auth');
+const mentions = require('../lib/mentions');
+const { collectMissed } = require('../lib/replay');
 
 // Track connected clients: Map<channelId, Set<{ws, userId, sessionId}>>
 const channelClients = new Map();
@@ -19,6 +21,10 @@ function setupWebSocket(server) {
     const token = url.searchParams.get('token');
     const channelId = url.searchParams.get('channel');
     const sessionToken = url.searchParams.get('session');
+    // Optional client-tracked cursor: the highest message id this session has
+    // already handled. More precise than the derived anchor and immune to
+    // connected_at being restamped, so a client that tracks ids should send it.
+    const sinceParam = url.searchParams.get('since');
 
     // Authenticate
     let user;
@@ -54,13 +60,21 @@ function setupWebSocket(server) {
       }
     }
 
-    // If session token provided, verify ownership and upsert session as connected
+    // If session token provided, verify ownership and upsert session as connected.
+    // The row is read BEFORE the upsert on purpose: the upsert stamps
+    // connected_at = NOW(), which would move the replay anchor to this instant and
+    // make every gap look empty. priorSession holds the pre-connect timestamps.
+    let priorSession = null;
     if (sessionToken) {
-      const existing = await pool.query('SELECT user_id FROM sessions WHERE session_token = $1', [sessionToken]);
+      const existing = await pool.query(
+        'SELECT user_id, created_at, connected_at, disconnected_at FROM sessions WHERE session_token = $1',
+        [sessionToken]
+      );
       if (existing.rows.length > 0 && existing.rows[0].user_id !== user.id) {
         ws.close(4003, 'Session token belongs to another user');
         return;
       }
+      priorSession = existing.rows[0] || null;
       await pool.query(
         `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
          VALUES ($1, $2, $3, $4, true, NOW())
@@ -168,6 +182,42 @@ function setupWebSocket(server) {
       user: { id: user.id, name: user.name },
       online: Object.values(onlineUsers),
     }));
+
+    // Replay what this session missed while it had no socket open. Sessions only:
+    // browsers load their own history over REST and would double-render it.
+    // Membership was already enforced above at connection time -- do not re-check.
+    if (sessionToken) {
+      try {
+        const missed = await collectMissed(pool, {
+          channelId,
+          sessionToken,
+          sinceId: sinceParam,
+          sessionRow: priorSession,
+        });
+        if (missed.count > 0 && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'replay',
+            channel_id: channelId,
+            count: missed.count,
+            from_id: missed.anchor_id,
+            cursor: missed.cursor,
+            truncated_by: missed.truncated_by,
+            delivery_mode: missed.mode,
+          }));
+          // Each missed message is sent as an ordinary new_message frame tagged
+          // replay:true, so a client needs no new handler -- it dedupes by id.
+          for (const message of missed.messages) {
+            if (ws.readyState !== 1) break;
+            const mentioned = message.mentioned;
+            delete message.mentioned;
+            ws.send(JSON.stringify({ type: 'new_message', message, mentioned, replay: true }));
+          }
+        }
+      } catch (err) {
+        // Replay is best-effort: a failure here must not break the connection.
+        console.error('[ws] replay failed:', err.message);
+      }
+    }
    } catch (err) {
     console.error('[ws] connection error:', err);
     try { ws.close(4000, 'Server error'); } catch {}
@@ -188,58 +238,11 @@ function broadcastToChannel(channelId, data) {
   }
 }
 
-// Resolve which session tokens are @-mentioned in a message's content.
-// Mirrors the client's mention matching (client/src/pages/ChatPage.jsx splitMentions):
-// an "@" that begins a token (start of string or preceded by whitespace), followed by
-// a known session label (case-insensitive, longest label first so multi-word labels
-// win over shorter prefixes), where the character after the label is not a word char.
-// Returns a Set of matched session_tokens. Draws from ALL sessions ever in the channel
-// (current + historical) so a mention resolves even for a session not currently online.
-// On any DB error it returns an empty set -- the safe failure mode (browsers still get
-// the message; no session is pushed in error rather than over-delivering).
-async function resolveMentions(channelId, content) {
-  const tokens = new Set();
-  if (typeof content !== 'string' || !content.includes('@')) return tokens;
-
-  let rows;
-  try {
-    ({ rows } = await pool.query(
-      'SELECT session_token, label FROM sessions WHERE channel_id = $1',
-      [channelId]
-    ));
-  } catch (err) {
-    console.error('[ws] resolveMentions query failed:', err.message);
-    return tokens;
-  }
-  if (!rows || rows.length === 0) return tokens;
-
-  // label (lowercased) -> [tokens]; candidate names sorted longest-first.
-  const labelToTokens = new Map();
-  for (const r of rows) {
-    if (!r.label) continue;
-    const key = r.label.toLowerCase();
-    if (!labelToTokens.has(key)) labelToTokens.set(key, []);
-    labelToTokens.get(key).push(r.session_token);
-  }
-  const names = [...labelToTokens.keys()].sort((a, b) => b.length - a.length);
-  if (names.length === 0) return tokens;
-
-  for (let i = 0; i < content.length; i++) {
-    if (content[i] !== '@') continue;
-    if (i > 0 && !/\s/.test(content[i - 1])) continue; // must begin a token
-    const rest = content.slice(i + 1);
-    const lowerRest = rest.toLowerCase();
-    const name = names.find((n) => {
-      if (!lowerRest.startsWith(n)) return false;
-      const after = rest[n.length];
-      return after === undefined || !/\w/.test(after);
-    });
-    if (name) {
-      for (const t of labelToTokens.get(name)) tokens.add(t);
-      i += name.length; // skip past the matched label
-    }
-  }
-  return tokens;
+// Mention resolution lives in server/lib/mentions.js so reconnect replay can reuse
+// the exact same matching (and the same gate) without an N+1 label lookup. This
+// wrapper keeps the original (channelId, content) signature for existing callers.
+function resolveMentions(channelId, content) {
+  return mentions.resolveMentions(pool, channelId, content);
 }
 
 // Deliver a new chat message to a channel, honoring its delivery mode. This is the
@@ -271,12 +274,15 @@ async function deliverMessage(channelId, message) {
   const mentionedPayload = JSON.stringify({ type: 'new_message', message, mentioned: true });
   for (const client of clients) {
     if (client.ws.readyState !== 1) continue;
+    // Same gate reconnect replay uses (lib/mentions.isDeliverable) -- a session
+    // must see on replay exactly what it would have seen live.
+    if (!mentions.isDeliverable(mode, mentioned, client.sessionToken)) continue;
+    // un-mentioned sessions are skipped by the gate (they can mcp_chat_read)
     if (!client.sessionToken) {
       client.ws.send(allPayload);                 // browser -- always live
-    } else if (mentioned.has(client.sessionToken)) {
+    } else {
       client.ws.send(mentionedPayload);           // mentioned session -- direct ping
     }
-    // un-mentioned sessions: intentionally skipped (they can mcp_chat_read)
   }
 }
 

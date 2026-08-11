@@ -37,7 +37,7 @@ The Claude desktop app spawns Claude Code with its own argv and never passes `--
 - Silence is never ambiguous: exit 0 = mentioned (message printed as JSON), 2 = usage, 3 = auth rejected/expired, 4 = stale or failed connection, 5 = hit `--timeout`. An expired token returns no messages, which is indistinguishable from a quiet channel unless it exits loudly. A 95s no-traffic watchdog catches a wedged socket (the server pings every 30s).
 - `--timeout` parses as a **float** deliberately: `parseInt` would turn `--timeout 0.5` into "never time out", the one behavior a watcher must not do by accident.
 - `mcp_chat_status` reports the channel id and session token so a session can arm its own watcher.
-- Gap it does not close: a mention landing between one watcher exiting and the next starting is not replayed. That needs durable delivery (a per-session cursor), which does not exist yet.
+- Gap it does not close on its own: a mention landing between one watcher exiting and the next starting is not pushed to it. The server side of durable delivery now covers that -- see "Durable delivery" below -- but the watcher must ask (`get_unseen`) on start; the socket alone will not tell it.
 
 ## When delivery stops
 
@@ -57,6 +57,28 @@ Each channel has a `delivery_mode` (`channels.delivery_mode`, default `broadcast
 - **`mention`**: only sessions whose label is `@<session-label>`-mentioned are pushed (the push frame is tagged `mentioned:true`). Un-mentioned sessions get nothing pushed but can still `mcp_chat_read` the full history — messages are not private, only delivery is gated. Mentioning a *human member* does not push to any session.
 
 **Browsers always receive every message** in both modes (mention-gating is for session push, not the human UI). All delivery flows through one choke point, `deliverMessage(channelId, message)` in `server/ws/index.js`, which the three send paths (browser WS, `POST /messages`, MCP `send_message`) call. Mention parsing lives in `resolveMentions(channelId, content)` (same file) and mirrors the client's `splitMentions` matching in `client/src/pages/ChatPage.jsx` (word-boundary `@`, longest label first, case-insensitive, char after label not `\w`); it draws from **all** sessions ever in the channel, not just connected ones. The `channel_mode_updated` WS event keeps browsers and sessions in sync on change.
+
+## Durable delivery (missed-message replay)
+
+Delivery used to touch only currently-open sockets, so a message sent during a reconnect window was lost to that session and an `@mention` of a session with no socket open was dropped entirely. Messages were never lost (they are written to `messages` before delivery is attempted) -- what was missing was any way for a session to learn it missed something. `server/lib/replay.js` closes that on the server side.
+
+- **No schema change.** The cursor is derived, not stored: `messages.id` is SERIAL so `m.id > anchor` is the replay predicate, and the anchor comes from the newest of `sessions.created_at / connected_at / disconnected_at`, converted to an id with `SELECT COALESCE(MAX(id),0) ... WHERE created_at <= anchor_time`. Timestamps only *derive* the starting id; they are never compared message-to-message.
+- **Read the session row BEFORE writing it.** Both the WS connect path and MCP `register_session` stamp `connected_at = NOW()`. Deriving the anchor after that write moves it to this instant and every gap looks empty. `server/ws/index.js` captures `priorSession` in the same `SELECT` that already checked token ownership. A client that re-registers should pass its own `since_id`, which always wins over the derived anchor.
+- **No server-side ack.** Nothing advances a stored cursor because there is no stored cursor. Repeated `get_unseen` calls return the same set until the caller persists the returned `cursor` and passes it back as `since_id`.
+- **Bounds:** 50 messages (matches the REST history default in `server/routes/messages.js`) and 24 hours. `truncated_by` is `'count' | 'age' | null` so a caller can tell which bound bit and whether paging forward is worthwhile. In mention mode the *scan* widens to 500 (`REPLAY_MENTION_SCAN_MAX`) before filtering, because a single mention sitting behind 50 unrelated messages is exactly the case this exists to catch; the delivered set is still capped at 50.
+- **One gate, not two delivery paths.** `deliverMessage` remains the only live fan-out. What replay shares with it is the *decision*: `isDeliverable(mode, mentionedTokens, sessionToken)` in `server/lib/mentions.js`, which both call, so a session sees on replay exactly what it would have seen live. Mention parsing moved to that module too, split into `loadChannelLabels` (one query per batch, not per message) + the pure `matchMentions`; `resolveMentions(channelId, content)` is still exported from `server/ws/index.js` with its original signature.
+- **Membership:** replay on the WS path relies on the connect-time gate already passed above it (do not add a redundant check). `get_unseen` copies the `get_messages` gate -- 403, no admin auto-join carve-out -- and additionally requires the session row to belong to the caller and to be registered in that channel.
+- **Harness:** `node server/test-replay.js` (`npm run test:replay` in `server/`) -- a fake pg client covering the never-connected session, the reconnect gap, mention filtering per session, the empty gap, the count bound, the age bound, `since_id` override and fallback, and a deep mention beyond the 50-message cap.
+- **Not covered:** SSE sessions (`/mcp/sse`) get no replay and cannot -- that path mints a fresh `session_token` per connection, so there is no identity to carry a cursor. `get_unseen` answers only for the channel a session is *joined* to; a channel it merely sent into holds its identity under the satellite token (`<session_token>-ch<id>`), which is what must be queried there.
+
+### Client contract
+
+- On WS connect a session may pass `&since=<message_id>`; omitted, the server derives the anchor.
+- After the existing `connected` frame the server sends, only when something was missed and only to session clients (never browsers):
+  1. `{ type: 'replay', channel_id, count, from_id, cursor, truncated_by, delivery_mode }`
+  2. then `count` ordinary `{ type: 'new_message', message, mentioned, replay: true }` frames, ascending by id.
+- Clients must dedupe by `message.id`. A replayed frame is deliberately shaped like a live one so no new handler is needed.
+- `get_unseen` (`POST /mcp/call`, args `channel_id`, `session_token`, optional `since_id`) answers "did I miss anything" with no socket open, returning `{ messages, count, delivery_mode, from_id, anchor_source, cursor, truncated_by }`.
 
 ## Private channels
 

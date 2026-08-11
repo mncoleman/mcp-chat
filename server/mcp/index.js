@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const pool = require('../db/pool');
 const { JWT_SECRET } = require('../middleware/auth');
 const { broadcastToChannel, deliverMessage, resolveMentions } = require('../ws/index');
+const { collectMissed, REPLAY_MAX_MESSAGES } = require('../lib/replay');
 const { withChannelLabelLock, resolveLabel } = require('../lib/session-labels');
 
 /**
@@ -216,6 +217,68 @@ function setupMcpRoutes(app) {
             [channel_id, Math.min(parseInt(limit), 100)]
           );
           return res.json({ messages: result.rows.reverse() });
+        }
+
+        case 'get_unseen': {
+          // "Did I miss anything?" -- answerable with no socket open. This is the
+          // read side of durable delivery: the same cursor and the same mention
+          // gate the WebSocket reconnect replay uses, over a plain tool call.
+          const { channel_id, session_token, since_id } = args;
+          if (!channel_id || !session_token) {
+            return res.json({ error: 'channel_id and session_token are required' });
+          }
+
+          // Membership gate copied from get_messages: 403, and deliberately NO
+          // admin auto-join carve-out. Replay must never reach into a channel the
+          // caller is not a member of, private or otherwise.
+          const unseenMemberCheck = await pool.query(
+            'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
+            [channel_id, user.id]
+          );
+          if (unseenMemberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member of this channel' });
+          }
+
+          // The session must be this user's, and must have an identity in THIS
+          // channel -- otherwise a member could read another user's unseen
+          // mentions, or ask about a token that can never be mentioned here.
+          const sessRow = await pool.query(
+            `SELECT user_id, channel_id, created_at, connected_at, disconnected_at
+             FROM sessions WHERE session_token = $1`,
+            [session_token]
+          );
+          if (sessRow.rows.length === 0) return res.json({ error: 'Session not found' });
+          if (sessRow.rows[0].user_id !== user.id) {
+            return res.status(403).json({ error: 'You can only query your own session' });
+          }
+          // Deliberately strict, and deliberately not widened to satellite rows: a
+          // session that only SENT into this channel (mcp_chat_send with a
+          // channel_id) holds its identity here under the derived token
+          // "<session_token>-ch<id>", and mentions here resolve against THAT
+          // label. Answering for the parent token would silently report zero.
+          // Ask with the satellite token if you want that channel's unseen set.
+          if (String(sessRow.rows[0].channel_id) !== String(channel_id)) {
+            return res.status(403).json({
+              error: 'That session is not registered in this channel. If it only sent into this channel, query with its satellite token for this channel instead.',
+            });
+          }
+
+          const missed = await collectMissed(pool, {
+            channelId: channel_id,
+            sessionToken: session_token,
+            sinceId: since_id,
+            sessionRow: sessRow.rows[0],
+          });
+
+          return res.json({
+            messages: missed.messages,
+            count: missed.count,
+            delivery_mode: missed.mode,
+            from_id: missed.anchor_id,
+            anchor_source: missed.anchor_source,
+            cursor: missed.cursor,
+            truncated_by: missed.truncated_by,
+          });
         }
 
         case 'get_presence': {
@@ -653,6 +716,19 @@ function setupMcpRoutes(app) {
               limit: { type: 'number', description: 'Number of messages (max 100, default 20)' },
             },
             required: ['channel_id'],
+          },
+        },
+        {
+          name: 'get_unseen',
+          description: `Messages this session missed since it was last in sync, honoring the channel's delivery mode (in mention mode only the @mentions it missed). Answers "did I miss anything" with no socket open. Bounded to ${REPLAY_MAX_MESSAGES} messages and 24 hours; check truncated_by. Persist the returned cursor and pass it back as since_id next time -- the server stores no acknowledgement.`,
+          inputSchema: {
+            type: 'object',
+            properties: {
+              channel_id: { type: 'number', description: 'Channel ID' },
+              session_token: { type: 'string', description: 'Your session token (must be registered in this channel)' },
+              since_id: { type: 'number', description: 'Highest message id already handled. Omit to derive the cursor from the session row (last connect/disconnect).' },
+            },
+            required: ['channel_id', 'session_token'],
           },
         },
         {
