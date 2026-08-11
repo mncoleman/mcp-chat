@@ -932,6 +932,12 @@ async function handleToolCall(name, args) {
         const carriedLabel = sessionState.labelIsCustom ? sessionState.sessionLabel : null;
         const requestedLabel = args.label || carriedLabel || undefined;
 
+        // If this session already posted into the channel it is now joining, it left
+        // a satellite row there. Hand it to the server to supersede: left in place it
+        // would make the allocator treat this session's own name as taken and hand
+        // back a suffixed one, so the act of having sent would rename it on arrival.
+        const satelliteToken = remoteSendSessions.get(channelId)?.sessionToken || undefined;
+
         disconnectWebSocket();
         const sessionToken = `mcp-${crypto.randomBytes(16).toString('hex')}`;
         sessionState = {
@@ -957,6 +963,7 @@ async function handleToolCall(name, args) {
             channel_id: channelId,
             session_token: sessionToken,
             label: requestedLabel,
+            supersede_token: satelliteToken,
           }, sessionState.token);
           sessionLabel = regResult.label || sessionLabel;
           sessionState.sessionLabel = sessionLabel;

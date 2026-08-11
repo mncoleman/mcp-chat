@@ -286,11 +286,27 @@ function setupMcpRoutes(app) {
           // active session in that channel's presence.
           const isConnected = args.connected !== false;
 
+          // A session that posted into this channel before joining it left a
+          // satellite row behind. Superseding folds that row into the new one:
+          // its messages are repointed so their attribution survives, and the row
+          // is removed so it cannot make the session's own name look taken.
+          const supersedeToken = typeof args.supersede_token === 'string' ? args.supersede_token : null;
+
           const label = await withChannelLabelLock(channel_id, async (client) => {
+            let supersede = null;
+            if (supersedeToken && supersedeToken !== session_token) {
+              const prior = await client.query(
+                'SELECT 1 FROM sessions WHERE session_token = $1 AND user_id = $2 AND channel_id = $3',
+                [supersedeToken, user.id, channel_id]
+              );
+              if (prior.rows.length > 0) supersede = supersedeToken;
+            }
+
             const resolved = await resolveLabel(client, {
               channelId: channel_id,
               requested: args.label,
               excludeToken: session_token,
+              excludeTokens: [supersede],
             });
             await client.query(
               `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
@@ -298,6 +314,14 @@ function setupMcpRoutes(app) {
                ON CONFLICT (session_token) DO UPDATE SET is_connected = $5, connected_at = NOW(), label = $4`,
               [session_token, user.id, channel_id, resolved.label, isConnected]
             );
+
+            if (supersede) {
+              await client.query(
+                'UPDATE messages SET session_id = $1 WHERE session_id = $2',
+                [session_token, supersede]
+              );
+              await client.query('DELETE FROM sessions WHERE session_token = $1', [supersede]);
+            }
             return resolved.label;
           });
 

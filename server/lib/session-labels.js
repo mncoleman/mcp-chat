@@ -46,13 +46,16 @@ async function withChannelLabelLock(channelId, fn) {
 }
 
 /**
- * Every label currently in use in a channel, lowercased, excluding one session.
- * excludeToken lets a session re-register or rename without colliding with itself.
+ * Every label currently in use in a channel, lowercased, excluding some sessions.
+ * The exclusions let a session re-register or rename without colliding with
+ * itself -- including with a satellite row it left behind by posting into the
+ * channel before joining it.
  */
-async function usedLabels(client, channelId, excludeToken) {
+async function usedLabels(client, channelId, excludeTokens) {
+  const tokens = (excludeTokens || []).filter(Boolean);
   const result = await client.query(
-    'SELECT label FROM sessions WHERE channel_id = $1 AND ($2::text IS NULL OR session_token <> $2)',
-    [channelId, excludeToken || null]
+    'SELECT label FROM sessions WHERE channel_id = $1 AND NOT (session_token = ANY($2::text[]))',
+    [channelId, tokens]
   );
   return new Set(result.rows.map(r => String(r.label || '').trim().toLowerCase()).filter(Boolean));
 }
@@ -94,8 +97,8 @@ function disambiguate(requested, taken) {
  *
  * Runs inside the caller's locked transaction client.
  */
-async function resolveLabel(client, { channelId, requested, excludeToken }) {
-  const taken = await usedLabels(client, channelId, excludeToken);
+async function resolveLabel(client, { channelId, requested, excludeToken, excludeTokens }) {
+  const taken = await usedLabels(client, channelId, [excludeToken, ...(excludeTokens || [])]);
   const wanted = typeof requested === 'string' ? requested.trim() : '';
   if (!wanted) return { label: nextAutoLabel(taken), autoAssigned: true };
   return { label: disambiguate(wanted, taken), autoAssigned: false };
