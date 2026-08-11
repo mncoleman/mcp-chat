@@ -10,7 +10,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone, PanelLeft } from 'lucide-react'
+import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone, PanelLeft, ListFilter, User } from 'lucide-react'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -126,6 +126,13 @@ export default function ChatPage() {
   // Channel delivery-mode state
   const [savingMode, setSavingMode] = useState(false)
 
+  // Participant filter: null (whole channel) or { type: 'session', token } /
+  // { type: 'member', userId }. A session is held by TOKEN rather than by name
+  // so a rename keeps the filter pointed at the same session, and the label
+  // shown resolves through sessionLabelMap like every other label on the page.
+  const [participantFilter, setParticipantFilter] = useState(null)
+  const [showParticipants, setShowParticipants] = useState(false)
+
   // Channel name + description editor state
   const [editingChannel, setEditingChannel] = useState(false)
   // Only consulted below md, where the channel list is a slide-over.
@@ -213,6 +220,79 @@ export default function ChatPage() {
     })
     return { ...map, ...liveSessionLabels }
   }, [channelDetails, allMessages, liveSessionLabels])
+
+  // A filter is scoped to the channel it was set in. Carrying it across a
+  // channel switch would open the next channel showing nothing, with the cause
+  // off-screen. Reset during render (before the first paint of the new channel)
+  // rather than in an effect, which would flash an empty list first.
+  const filterChannelRef = useRef(channelId)
+  if (filterChannelRef.current !== channelId) {
+    filterChannelRef.current = channelId
+    if (participantFilter) setParticipantFilter(null)
+    if (showParticipants) setShowParticipants(false)
+  }
+
+  // Everyone who can be filtered to: channel members plus anyone who has spoken.
+  // Humans and sessions are separate axes -- a human's own messages have no
+  // session_id, and their Claude's messages are that session's, not theirs -- so
+  // they are listed separately and matched separately below.
+  const participants = useMemo(() => {
+    // Keyed by String(id): the member list and the message rows reach the client
+    // by different routes, and one of them handing back a string id would
+    // otherwise split one person into two chips that each match nothing.
+    const members = new Map()
+    channelDetails?.members?.forEach((m) => members.set(String(m.id), m.name))
+    allMessages.forEach((m) => {
+      if (!m.session_id && m.user_id != null && !members.has(String(m.user_id))) members.set(String(m.user_id), m.user_name)
+    })
+
+    // Owner name per session token. Labels are not unique in live data (legacy
+    // duplicates plus the "Claude Code Session" rows the SSE and browser-WS
+    // paths insert), so the owner is shown alongside to tell two apart.
+    const sessions = new Map()
+    channelDetails?.active_sessions?.forEach((s) => {
+      if (s.session_token) sessions.set(s.session_token, s.user_name)
+    })
+    allMessages.forEach((m) => {
+      if (m.session_id && !sessions.has(m.session_id)) sessions.set(m.session_id, m.user_name)
+    })
+
+    const memberList = []
+    members.forEach((name, id) => memberList.push({ key: `member:${id}`, type: 'member', userId: id, name: name || 'Unknown' }))
+    const sessionList = []
+    sessions.forEach((owner, token) => sessionList.push({
+      key: `session:${token}`,
+      type: 'session',
+      token,
+      name: sessionLabelMap[token] || 'Session',
+      owner,
+    }))
+    const byName = (a, b) => a.name.localeCompare(b.name)
+    return [...memberList.sort(byName), ...sessionList.sort(byName)]
+  }, [channelDetails, allMessages, sessionLabelMap])
+
+  const isFiltered = (p) => participantFilter && (
+    p.type === 'session'
+      ? participantFilter.type === 'session' && participantFilter.token === p.token
+      : participantFilter.type === 'member' && participantFilter.userId === p.userId
+  )
+
+  // The messages actually rendered. Everything the list derives per message --
+  // grouping in particular -- must read from THIS array, not allMessages.
+  const visibleMessages = useMemo(() => {
+    if (!participantFilter) return allMessages
+    if (participantFilter.type === 'session') {
+      return allMessages.filter((m) => m.session_id === participantFilter.token)
+    }
+    return allMessages.filter((m) => !m.session_id && String(m.user_id) === participantFilter.userId)
+  }, [allMessages, participantFilter])
+
+  // Name for the active filter, resolved live so a rename is reflected here too.
+  const activeFilterName = participantFilter && (
+    participantFilter.type === 'session'
+      ? sessionLabelMap[participantFilter.token] || 'Session'
+      : participants.find((p) => p.type === 'member' && p.userId === participantFilter.userId)?.name || 'this person'
+  )
 
   // @-mention candidates: human members first, then connected sessions.
   // Live rename events take precedence over a session's stored label.
@@ -356,10 +436,11 @@ export default function ChatPage() {
     return map
   }, [allMessages])
 
-  // Auto-scroll
+  // Auto-scroll. Keyed on the rendered length, not the raw one, so applying or
+  // clearing a filter lands at the bottom of what is actually on screen.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [allMessages.length])
+  }, [visibleMessages.length])
 
   const handleSend = (e) => {
     e?.preventDefault?.()
@@ -688,6 +769,24 @@ export default function ChatPage() {
                   <span className="hidden lg:inline">Mentions only</span>
                 </button>
               </div>
+              {/* Participant filter. Icon-only below sm so it stays reachable in
+                  a split view or on a phone, where the header has no room for
+                  labels. */}
+              <Button
+                variant={participantFilter ? 'secondary' : 'ghost'}
+                size="sm"
+                className="gap-1.5 h-8"
+                onClick={() => setShowParticipants((v) => !v)}
+                title="Filter this channel to one session or person"
+              >
+                <ListFilter className="h-3.5 w-3.5" />
+                {/* Capped: a session label runs to 100 chars and this row cannot
+                    shrink, so an uncapped name pushes the Live badge off-screen. */}
+                <span className="hidden sm:inline-block max-w-[10rem] truncate align-middle">
+                  {participantFilter ? activeFilterName : 'Filter'}
+                </span>
+                {participantFilter && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
+              </Button>
               <Button
                 variant={channelDetails?.instructions ? 'secondary' : 'ghost'}
                 size="sm"
@@ -762,10 +861,87 @@ export default function ChatPage() {
             </div>
           )}
 
+          {/* Participant filter panel */}
+          {showParticipants && (
+            <div className="border-b bg-muted/30 px-4 py-3 shrink-0">
+              <div className="max-w-3xl mx-auto">
+                <div className="flex items-center gap-1.5 mb-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  <ListFilter className="h-3.5 w-3.5" /> Show messages from
+                </div>
+                <p className="text-[11px] text-muted-foreground mb-2">
+                  Narrows what is displayed here only. Nothing is hidden from anyone else, and delivery is unaffected.
+                </p>
+                {/* Capped height: a channel with a dozen sessions would otherwise
+                    wrap enough chips to push the messages off a phone screen. */}
+                <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
+                  <button
+                    type="button"
+                    onClick={() => setParticipantFilter(null)}
+                    className={cn(
+                      'rounded-full border px-2.5 py-1 text-xs transition-colors',
+                      participantFilter ? 'bg-background hover:bg-accent' : 'bg-secondary text-secondary-foreground',
+                    )}
+                  >
+                    Everyone
+                  </button>
+                  {participants.map((p) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => setParticipantFilter(
+                        isFiltered(p)
+                          ? null
+                          : p.type === 'session'
+                            ? { type: 'session', token: p.token }
+                            : { type: 'member', userId: p.userId },
+                      )}
+                      title={p.type === 'session' ? `Claude session -- ${p.owner || 'unknown owner'}` : 'Person'}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
+                        isFiltered(p) ? 'bg-secondary text-secondary-foreground' : 'bg-background hover:bg-accent',
+                      )}
+                    >
+                      {p.type === 'session'
+                        ? <Terminal className="h-3 w-3 shrink-0" />
+                        : <User className="h-3 w-3 shrink-0" />}
+                      <span className="max-w-[12rem] truncate">{p.name}</span>
+                      {p.type === 'session' && p.owner && (
+                        <span className="text-muted-foreground">{p.owner}</span>
+                      )}
+                    </button>
+                  ))}
+                  {participants.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No participants yet</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Active-filter bar. Stays visible with the panel closed so a filtered
+              channel never looks like an empty or broken one. */}
+          {participantFilter && !showParticipants && (
+            <div className="border-b bg-muted/50 px-4 py-1.5 shrink-0">
+              <div className="max-w-3xl mx-auto flex items-center gap-2 text-xs">
+                <ListFilter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate min-w-0">
+                  Showing only <span className="font-medium">{activeFilterName}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setParticipantFilter(null)}
+                  className="ml-auto shrink-0 underline underline-offset-2 hover:opacity-80"
+                >
+                  Show everyone
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Messages */}
           <ScrollArea className="flex-1 p-4">
             <div className="space-y-0.5 max-w-3xl mx-auto">
-              {allMessages.map((msg, i) => {
+              {visibleMessages.map((msg, i) => {
                 const isFromClaude = !!msg.session_id
                 const isOwn = msg.user_id === user?.id
                 const sColor = isFromClaude ? (sessionColorMap[msg.session_id] || SESSION_COLORS[0]) : null
@@ -773,7 +949,11 @@ export default function ChatPage() {
                 const displayName = isFromClaude
                   ? `${msg.user_name?.split(' ')[0]}'s Claude${resolvedLabel ? ` (${resolvedLabel})` : ''}`
                   : msg.user_name
-                const prev = allMessages[i - 1]
+                // Grouping is computed over the RENDERED list: with a filter on,
+                // allMessages[i - 1] is a message that may not be on screen, and
+                // reading it here would strip the author header off the first
+                // message of a run (or invent a group that is not visible).
+                const prev = visibleMessages[i - 1]
                 const prevIsFromClaude = !!prev?.session_id
                 const isGrouped = prev && prev.user_id === msg.user_id &&
                   prevIsFromClaude === isFromClaude &&
@@ -834,6 +1014,18 @@ export default function ChatPage() {
                   </div>
                 )
               })}
+              {participantFilter && visibleMessages.length === 0 && (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No messages from {activeFilterName} in the loaded history.{' '}
+                  <button
+                    type="button"
+                    onClick={() => setParticipantFilter(null)}
+                    className="underline underline-offset-2 hover:opacity-80"
+                  >
+                    Show everyone
+                  </button>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
           </ScrollArea>
