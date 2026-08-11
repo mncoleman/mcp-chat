@@ -253,6 +253,7 @@ function connectWebSocket() {
         // A human naming this session from the browser is a chosen name too, so it
         // carries into the next channel exactly like mcp_chat_set_name.
         sessionState.labelIsCustom = true;
+        remoteSendSessions.clear(); // satellites carry the old name
         pushChannelMessage('mcp-chat', `This session has been named "${data.label}". Refer to yourself as "${data.label}" in #${sessionState.channelName}.`, {
           channel: sessionState.channelName,
           event: 'session_renamed',
@@ -1160,6 +1161,10 @@ async function handleToolCall(name, args) {
       // The server suffixes a name already taken in this channel, so use what it returned.
       sessionState.sessionLabel = result.label || newName;
       sessionState.labelIsCustom = true;
+      // Satellites were registered under the OLD name, so drop them: the next
+      // cross-channel send re-registers under the new one rather than stamping a
+      // name this session no longer answers to.
+      remoteSendSessions.clear();
       let renameText = `Your session is now named "${sessionState.sessionLabel}" in #${sessionState.channelName}. This name appears on every message you send, and it now follows you into any channel you join.`;
       if (sessionState.sessionLabel !== newName) {
         renameText += ` (You asked for "${newName}", which another session in this channel already uses.)`;

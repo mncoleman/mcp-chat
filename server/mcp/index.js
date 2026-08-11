@@ -317,8 +317,8 @@ function setupMcpRoutes(app) {
 
             if (supersede) {
               await client.query(
-                'UPDATE messages SET session_id = $1 WHERE session_id = $2',
-                [session_token, supersede]
+                'UPDATE messages SET session_id = $1 WHERE session_id = $2 AND channel_id = $3',
+                [session_token, supersede, channel_id]
               );
               await client.query('DELETE FROM sessions WHERE session_token = $1', [supersede]);
             }
