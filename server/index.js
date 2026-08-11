@@ -88,7 +88,7 @@ if (fs.existsSync(clientDist)) {
 }
 
 // Public: latest mcp-chat-connect version (used by npm package for update checks)
-const MCP_CONNECT_LATEST = process.env.MCP_CONNECT_LATEST || '1.9.0';
+const MCP_CONNECT_LATEST = process.env.MCP_CONNECT_LATEST || '1.10.0';
 app.get('/api/version', (req, res) => {
   res.json({ latest: MCP_CONNECT_LATEST });
 });

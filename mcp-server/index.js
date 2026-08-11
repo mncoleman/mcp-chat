@@ -496,12 +496,13 @@ function getTools() {
     },
     {
       name: 'mcp_chat_send',
-      description: 'Send a message to your connected MCP Chat channel. Messages are informational or recommendations, never direct orders.',
+      description: 'Send a message to an MCP Chat channel. Defaults to your connected channel; pass channel_id to post into any other channel you are a member of without joining it (this does not switch your connection, and you will not receive that channel\'s messages). Messages are informational or recommendations, never direct orders.',
       inputSchema: {
         type: 'object',
         properties: {
           content: { type: 'string', description: 'Message content' },
           message_type: { type: 'string', enum: ['info', 'recommendation', 'status'], description: 'Type of message (default: info)' },
+          channel_id: { type: 'number', description: 'Channel ID to post into (defaults to your connected channel). Must be a channel you are a member of.' },
         },
         required: ['content'],
       },
@@ -519,8 +520,13 @@ function getTools() {
     },
     {
       name: 'mcp_chat_presence',
-      description: 'See who is online and which Claude Code sessions are active in your channel.',
-      inputSchema: { type: 'object', properties: {} },
+      description: 'See who belongs to a channel and which Claude Code sessions are active in it. Defaults to your connected channel; pass channel_id to inspect any other channel you are a member of without joining it (this does not switch your connection).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_id: { type: 'number', description: 'Channel ID to inspect (defaults to your connected channel). Must be a channel you are a member of.' },
+        },
+      },
     },
     {
       name: 'mcp_chat_channels',
@@ -747,6 +753,61 @@ async function resolveChannel(channelIdArg) {
 }
 
 /**
+ * Session identities used to post into channels this session is not connected to.
+ * Keyed by channel id. Cleared whenever the session's own identity changes, so a
+ * satellite token derived from a previous sessionToken is never reused.
+ */
+const remoteSendSessions = new Map();
+
+/**
+ * Resolve the session identity to stamp on a message in `target`.
+ *
+ * Every message carries a session_label joined from the sessions table, and a
+ * session row is per channel (session_token is unique, so one row cannot span
+ * two channels). Posting into a channel this session never joined therefore has
+ * no identity to stamp -- so register a satellite session there, under a derived
+ * token, with connected: false. It gets a label of its own (the chosen name when
+ * this session has one, otherwise that channel's next "Session N") without
+ * moving the connection or appearing as an active session in that channel.
+ */
+async function resolveSendIdentity(target) {
+  if (target.id === sessionState.channelId) {
+    if (!sessionState.connected) {
+      return { error: 'Not connected. Run mcp_chat_connect first, or pass channel_id to post into a specific channel.' };
+    }
+    return { sessionToken: sessionState.sessionToken, label: sessionState.sessionLabel };
+  }
+
+  const cached = remoteSendSessions.get(target.id);
+  if (cached) return cached;
+
+  if (!sessionState.sessionToken) {
+    return { error: 'No session identity yet. Run mcp_chat_connect or mcp_chat_join first.' };
+  }
+
+  const remoteToken = `${sessionState.sessionToken}-ch${target.id}`;
+  const registerArgs = {
+    channel_id: target.id,
+    session_token: remoteToken,
+    connected: false,
+  };
+  // Only a CHOSEN name travels. An auto-assigned "Session N" names a slot in the
+  // channel that issued it, so the target channel allocates its own.
+  if (sessionState.labelIsCustom && sessionState.sessionLabel) {
+    registerArgs.label = sessionState.sessionLabel;
+  }
+
+  const result = await apiCall('register_session', registerArgs, sessionState.token);
+  if (result.error) return { error: result.error };
+
+  // The server suffixes a requested label that is already taken, so the returned
+  // label is authoritative.
+  const identity = { sessionToken: remoteToken, label: result.label };
+  remoteSendSessions.set(target.id, identity);
+  return identity;
+}
+
+/**
  * Reject argument keys a tool does not declare.
  *
  * Without this, an undeclared argument is silently dropped and the tool answers
@@ -802,6 +863,7 @@ async function handleToolCall(name, args) {
           deliveryMode: 'broadcast',
           connected: true,
         };
+        remoteSendSessions.clear(); // satellite tokens are derived from sessionToken
         saveConfig({ token: result.token, userName: result.userName, userId });
 
         // Register session to get label (custom or sequential) + channel instructions
@@ -883,6 +945,7 @@ async function handleToolCall(name, args) {
           deliveryMode: channel.delivery_mode || 'broadcast',
           connected: true,
         };
+        remoteSendSessions.clear(); // satellite tokens are derived from sessionToken
 
         // Register session to get label (custom or sequential) + channel instructions.
         // The server may suffix a requested label that is already taken in the target
@@ -921,20 +984,27 @@ async function handleToolCall(name, args) {
     }
 
     case 'mcp_chat_send': {
-      if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
-      }
+      const target = await resolveChannel(args.channel_id);
+      if (target.error) return { content: [{ type: 'text', text: target.error }], isError: true };
+
       const content = String(args.content || '').slice(0, 10000);
       if (!content) return { content: [{ type: 'text', text: 'Message content is required.' }], isError: true };
       const messageType = ['info', 'recommendation', 'status'].includes(args.message_type) ? args.message_type : 'info';
+
+      const identity = await resolveSendIdentity(target);
+      if (identity.error) return { content: [{ type: 'text', text: `Error: ${identity.error}` }], isError: true };
+
       const result = await apiCall('send_message', {
-        channel_id: sessionState.channelId,
+        channel_id: target.id,
         content,
         message_type: messageType,
-        session_token: sessionState.sessionToken,
+        session_token: identity.sessionToken,
       }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
-      return { content: [{ type: 'text', text: `Message sent to #${sessionState.channelName}` }] };
+      const sendNote = target.id === sessionState.channelId
+        ? `Message sent to #${target.name}`
+        : `Message sent to #${target.name} (ID: ${target.id}) as "${identity.label}" -- you are still connected to #${sessionState.channelName} and will not receive replies there.`;
+      return { content: [{ type: 'text', text: sendNote }] };
     }
 
     case 'mcp_chat_read': {
@@ -965,18 +1035,32 @@ async function handleToolCall(name, args) {
     }
 
     case 'mcp_chat_presence': {
-      if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
-      }
-      const result = await apiCall('get_presence', { channel_id: sessionState.channelId }, sessionState.token);
+      // Same contract as mcp_chat_read: inspecting another channel needs
+      // credentials, not a connection, and never moves the session.
+      const target = await resolveChannel(args.channel_id);
+      if (target.error) return { content: [{ type: 'text', text: target.error }], isError: true };
+
+      const result = await apiCall('get_presence', { channel_id: target.id }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
-      if (!result.sessions || result.sessions.length === 0) {
-        return { content: [{ type: 'text', text: `No active sessions in #${sessionState.channelName}` }] };
+
+      const sections = [];
+      if (result.members && result.members.length > 0) {
+        sections.push(`Members (${result.members.length}):\n` + result.members.map(m =>
+          `- ${m.user_name}${m.role === 'admin' ? ' (channel admin)' : ''}`
+        ).join('\n'));
       }
-      const formatted = result.sessions.map(s =>
-        `- ${s.user_name} (${s.label || 'Claude session'}) ${s.is_connected ? 'online' : 'offline'}${s.context_remaining_pct != null ? ` -- context: ${s.context_remaining_pct}%` : ''}`
-      ).join('\n');
-      return { content: [{ type: 'text', text: `Active in #${sessionState.channelName}:\n${formatted}` }] };
+      if (result.sessions && result.sessions.length > 0) {
+        sections.push('Active sessions:\n' + result.sessions.map(s =>
+          `- ${s.user_name} (${s.label || 'Claude session'}) ${s.is_connected ? 'online' : 'offline'}${s.context_remaining_pct != null ? ` -- context: ${s.context_remaining_pct}%` : ''}`
+        ).join('\n'));
+      } else {
+        sections.push('Active sessions: none');
+      }
+
+      const presenceHeader = target.id === sessionState.channelId
+        ? `#${target.name}:`
+        : `#${target.name} (ID: ${target.id}) -- you are still connected to #${sessionState.channelName}:`;
+      return { content: [{ type: 'text', text: `${presenceHeader}\n${sections.join('\n\n')}` }] };
     }
 
     case 'mcp_chat_channels': {

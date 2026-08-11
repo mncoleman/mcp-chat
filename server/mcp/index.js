@@ -236,7 +236,19 @@ function setupMcpRoutes(app) {
              WHERE s.channel_id = $1 AND s.is_connected = true`,
             [channel_id]
           );
-          return res.json({ sessions: result.rows });
+
+          // Human membership, not just live sessions. Presence answered "who is
+          // connected right now", which is empty for a quiet channel and says
+          // nothing about who belongs to it -- the question asked when auditing a
+          // channel you are not in.
+          const members = await pool.query(
+            `SELECT u.id as user_id, u.name as user_name, u.email, cm.role
+             FROM channel_members cm JOIN users u ON u.id = cm.user_id
+             WHERE cm.channel_id = $1
+             ORDER BY u.name`,
+            [channel_id]
+          );
+          return res.json({ sessions: result.rows, members: members.rows });
         }
 
         case 'register_session': {
@@ -268,6 +280,12 @@ function setupMcpRoutes(app) {
           // two sessions joining the same channel at once cannot land on the same
           // label. A requested label is honored when free and suffixed when taken,
           // so the caller must use the label returned below, not the one it asked for.
+          // A session that only SENDS into a channel (see send_message's channel_id)
+          // registers with connected: false -- it needs an identity to stamp on its
+          // messages, but it is not listening there and must not show up as an
+          // active session in that channel's presence.
+          const isConnected = args.connected !== false;
+
           const label = await withChannelLabelLock(channel_id, async (client) => {
             const resolved = await resolveLabel(client, {
               channelId: channel_id,
@@ -276,9 +294,9 @@ function setupMcpRoutes(app) {
             });
             await client.query(
               `INSERT INTO sessions (session_token, user_id, channel_id, label, is_connected, connected_at)
-               VALUES ($1, $2, $3, $4, true, NOW())
-               ON CONFLICT (session_token) DO UPDATE SET is_connected = true, connected_at = NOW(), label = $4`,
-              [session_token, user.id, channel_id, resolved.label]
+               VALUES ($1, $2, $3, $4, $5, NOW())
+               ON CONFLICT (session_token) DO UPDATE SET is_connected = $5, connected_at = NOW(), label = $4`,
+              [session_token, user.id, channel_id, resolved.label, isConnected]
             );
             return resolved.label;
           });
