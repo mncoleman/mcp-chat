@@ -32,6 +32,7 @@
   },
   "files": [
     "index.js",
+    "watch.js",
     "status-line-wrapper.js",
     "skills/mcp-chat-context/SKILL.md"
   ]
