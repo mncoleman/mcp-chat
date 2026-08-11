@@ -186,7 +186,15 @@ function setupWebSocket(server) {
     // Replay what this session missed while it had no socket open. Sessions only:
     // browsers load their own history over REST and would double-render it.
     // Membership was already enforced above at connection time -- do not re-check.
-    if (sessionToken) {
+    //
+    // OPT-IN ONLY. Replayed messages arrive as ordinary new_message frames, and
+    // every client published so far (<= 1.10.0) has no id dedupe -- it would push
+    // up to 50 old messages into Claude's context as if they were new, on every
+    // reconnect, including the one each deploy causes. A client asks for replay by
+    // sending `since` (an id it has handled) or `replay=1`; silence means an old
+    // client, and an old client must get exactly what it got before.
+    const wantsReplay = sinceParam !== null || url.searchParams.get('replay') === '1';
+    if (sessionToken && wantsReplay) {
       try {
         const missed = await collectMissed(pool, {
           channelId,
