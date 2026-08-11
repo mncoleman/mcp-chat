@@ -237,10 +237,13 @@ export default function ChatPage() {
   // session_id, and their Claude's messages are that session's, not theirs -- so
   // they are listed separately and matched separately below.
   const participants = useMemo(() => {
+    // Keyed by String(id): the member list and the message rows reach the client
+    // by different routes, and one of them handing back a string id would
+    // otherwise split one person into two chips that each match nothing.
     const members = new Map()
-    channelDetails?.members?.forEach((m) => members.set(m.id, m.name))
+    channelDetails?.members?.forEach((m) => members.set(String(m.id), m.name))
     allMessages.forEach((m) => {
-      if (!m.session_id && m.user_id != null && !members.has(m.user_id)) members.set(m.user_id, m.user_name)
+      if (!m.session_id && m.user_id != null && !members.has(String(m.user_id))) members.set(String(m.user_id), m.user_name)
     })
 
     // Owner name per session token. Labels are not unique in live data (legacy
@@ -281,7 +284,7 @@ export default function ChatPage() {
     if (participantFilter.type === 'session') {
       return allMessages.filter((m) => m.session_id === participantFilter.token)
     }
-    return allMessages.filter((m) => !m.session_id && m.user_id === participantFilter.userId)
+    return allMessages.filter((m) => !m.session_id && String(m.user_id) === participantFilter.userId)
   }, [allMessages, participantFilter])
 
   // Name for the active filter, resolved live so a rename is reflected here too.
@@ -777,7 +780,11 @@ export default function ChatPage() {
                 title="Filter this channel to one session or person"
               >
                 <ListFilter className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">{participantFilter ? activeFilterName : 'Filter'}</span>
+                {/* Capped: a session label runs to 100 chars and this row cannot
+                    shrink, so an uncapped name pushes the Live badge off-screen. */}
+                <span className="hidden sm:inline-block max-w-[10rem] truncate align-middle">
+                  {participantFilter ? activeFilterName : 'Filter'}
+                </span>
                 {participantFilter && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
               </Button>
               <Button
@@ -864,7 +871,9 @@ export default function ChatPage() {
                 <p className="text-[11px] text-muted-foreground mb-2">
                   Narrows what is displayed here only. Nothing is hidden from anyone else, and delivery is unaffected.
                 </p>
-                <div className="flex flex-wrap gap-1.5">
+                {/* Capped height: a channel with a dozen sessions would otherwise
+                    wrap enough chips to push the messages off a phone screen. */}
+                <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
                   <button
                     type="button"
                     onClick={() => setParticipantFilter(null)}
