@@ -66,6 +66,9 @@ function usage(message) {
     '                     no session token is available.\n' +
     '  --timeout <mins>   Give up and exit 5 after this long (default 240, 0 = never).\n' +
     '  --any              Wake on any message, not only mentions.\n' +
+    '  --since <id>       Highest message id you have already handled. Checked\n' +
+    '                     before connecting, so a mention that landed between one\n' +
+    '                     watcher exiting and this one starting is not missed.\n' +
     '\n' +
     'Exit codes: 0 mentioned, 2 usage, 3 auth, 4 stale connection, 5 timed out.\n'
   );
@@ -90,6 +93,10 @@ function parseArgs(argv) {
     // must not do by accident.
     else if (arg === '--timeout') args.timeoutMins = parseFloat(next());
     else if (arg === '--any') args.any = true;
+    // The id you last handled. Without it the server derives the gap from the
+    // session's own connect/disconnect timestamps, which is right for a session
+    // that was genuinely disconnected and wrong for a watcher that just restarted.
+    else if (arg === '--since') args.sinceId = next();
     else if (arg === '--help' || arg === '-h') usage();
     else usage(`unknown argument ${arg}`);
   }
@@ -123,6 +130,32 @@ function done(code, message, payload) {
   if (payload) process.stdout.write(`${JSON.stringify(payload)}\n`);
   if (message) process.stderr.write(`${message}\n`);
   process.exit(code);
+}
+
+/**
+ * Ask the server what this session missed while nothing was listening.
+ * Returns { messages } or { error }; an auth failure is an error, never an
+ * empty list, because "nothing missed" and "cannot ask" must not look alike.
+ */
+async function unseenMentions(baseUrl, token, channelId, sessionToken, sinceId) {
+  try {
+    const res = await fetch(`${baseUrl}/mcp/call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        tool: 'get_unseen',
+        args: { channel_id: channelId, session_token: sessionToken, ...(sinceId != null ? { since_id: sinceId } : {}) },
+      }),
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { error: `server rejected the saved token or this session is not registered in channel ${channelId} (HTTP ${res.status})` };
+    }
+    const data = await res.json();
+    if (data.error) return { error: data.error };
+    return { messages: data.messages || [] };
+  } catch (err) {
+    return { error: `could not reach ${baseUrl}: ${err.message}` };
+  }
 }
 
 async function resolveLabel(baseUrl, token, channelId, sessionToken) {
@@ -171,6 +204,29 @@ async function main(argv) {
   }
   if (!label && !args.any) {
     done(EXIT.USAGE, 'Nothing to watch for: pass --session with a token that is registered in this channel, or --label, or --any.');
+  }
+
+  // Cover the gap before the socket exists. A mention landing between one
+  // watcher exiting and the next starting is not on any wire -- only the server
+  // remembers it, and only if asked. Without this the watcher is only as
+  // reliable as the seconds between its own restarts.
+  if (sessionToken) {
+    const missed = await unseenMentions(baseUrl, token, args.channelId, sessionToken, args.sinceId);
+    if (missed.error) done(EXIT.AUTH, `Cannot watch: ${missed.error}`);
+    const hit = (missed.messages || []).find((m) => args.any || mentions(m.content, label));
+    if (hit) {
+      done(EXIT.MENTIONED, null, {
+        event: 'mentioned',
+        missed_while_not_watching: true,
+        channel_id: args.channelId,
+        from: hit.session_id
+          ? `${(hit.user_name || '').split(' ')[0]}'s Claude${hit.session_label ? ` (${hit.session_label})` : ''}`
+          : hit.user_name || 'someone',
+        session_label: hit.session_label || null,
+        content: hit.content,
+        created_at: hit.created_at || null,
+      });
+    }
   }
 
   const wsUrl = `${baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')}/ws?token=${encodeURIComponent(token)}&channel=${args.channelId}`;

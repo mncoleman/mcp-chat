@@ -230,6 +230,16 @@ function deliveryModeNotice(label) {
 let wsConnection = null;
 let wsReconnectTimeout = null;
 let wsReconnectAttempts = 0;
+// Highest message id pushed into this session's context. Sent as `since` on
+// reconnect so the server replays only the gap, and used to drop a message that
+// arrives both live and replayed -- which is legitimate for anything sent during
+// the connect window.
+let lastSeenMessageId = null;
+const seenMessageIds = new Set();
+// Bounded so a long-lived session in a busy channel does not grow this forever.
+// Well above the server's 50-message replay cap, so a replayed batch is always
+// checkable against it.
+const SEEN_IDS_MAX = 500;
 // Retries are 5s, 10s, 20s, 40s, 60s... so the 4th failure is roughly a minute
 // of real downtime -- past a blip, worth telling the session about.
 const WS_RECONNECT_WARN_AFTER = 4;
@@ -239,7 +249,12 @@ function connectWebSocket() {
 
   // Note: JWT is passed as a query parameter because WebSocket does not support custom headers.
   // Be aware this token may appear in server/proxy access logs.
-  const wsUrl = `${MCP_CHAT_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?token=${sessionState.token}&channel=${sessionState.channelId}&session=${sessionState.sessionToken}`;
+  // Ask for what we missed while the socket was down. `since` is the highest
+  // message id already handled; the server derives an anchor when it is absent.
+  // Sending it at all is the opt-in -- the server stays silent for clients that
+  // do not dedupe, which is every client published before this one.
+  const sinceParam = lastSeenMessageId != null ? `&since=${lastSeenMessageId}` : '&replay=1';
+  const wsUrl = `${MCP_CHAT_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?token=${sessionState.token}&channel=${sessionState.channelId}&session=${sessionState.sessionToken}${sinceParam}`;
 
   if (wsConnection) {
     try { wsConnection.close(); } catch {}
@@ -267,11 +282,40 @@ function connectWebSocket() {
     try {
       const data = JSON.parse(raw.toString());
 
+      if (data.type === 'replay') {
+        // Header frame ahead of the missed messages. Worth surfacing only when
+        // the gap was truncated, because then reading the channel is the ONLY
+        // way to see the rest and silence would imply there was no rest.
+        process.stderr.write(`[mcp-chat] replaying ${data.count} missed message(s) in #${sessionState.channelName}\n`);
+        if (data.truncated_by) {
+          pushChannelMessage('mcp-chat', `You missed more than can be replayed in #${sessionState.channelName} (cut off by ${data.truncated_by === 'age' ? 'age' : 'count'}). The most recent ${data.count} follow. Use mcp_chat_read for the rest.`, {
+            channel: sessionState.channelName,
+            event: 'replay_truncated',
+            truncated_by: data.truncated_by,
+          });
+        }
+        return;
+      }
+
       if (data.type === 'new_message') {
         const msg = data.message;
         // Don't echo back messages sent by this Claude session itself
         // But DO receive messages from the same user's browser UI
         if (msg.session_id === sessionState.sessionToken) return;
+
+        // A message sent during the connect window legitimately arrives twice --
+        // once live, once in the replay. Dedupe on id so it is pushed once.
+        if (msg.id != null) {
+          if (seenMessageIds.has(msg.id)) return;
+          seenMessageIds.add(msg.id);
+          if (seenMessageIds.size > SEEN_IDS_MAX) {
+            // Drop the oldest half rather than clearing: clearing would make the
+            // very next replayed batch look unseen again.
+            const ids = [...seenMessageIds].sort((a, b) => a - b);
+            for (const id of ids.slice(0, Math.floor(ids.length / 2))) seenMessageIds.delete(id);
+          }
+          if (lastSeenMessageId == null || msg.id > lastSeenMessageId) lastSeenMessageId = msg.id;
+        }
 
         const senderLabel = msg.session_id
           ? `${msg.user_name?.split(' ')[0]}'s Claude${msg.session_label ? ` (${msg.session_label})` : ''}`
@@ -279,9 +323,11 @@ function connectWebSocket() {
 
         // In mentions-only channels, the server only delivers messages that @mention
         // this session and tags them mentioned:true -- flag it as a direct ping.
+        // A replayed message says so, or it reads as something just said.
+        const prefix = data.replay ? '[Missed while you were disconnected] ' : '';
         const content = data.mentioned
-          ? `[You were @mentioned] ${msg.content}`
-          : msg.content;
+          ? `${prefix}[You were @mentioned] ${msg.content}`
+          : `${prefix}${msg.content}`;
 
         // NOTE: channel notification `meta` is Record<string,string> -- every value
         // MUST be a string, or Claude Code silently drops the whole notification.
@@ -952,6 +998,11 @@ async function handleToolCall(name, args) {
           connected: true,
         };
         remoteSendSessions.clear(); // satellite tokens are derived from sessionToken
+        // Message ids are global, so a cursor from the previous channel would
+        // skip anything older in this one. Drop it and let the server derive
+        // the anchor from this session's row in the channel it just entered.
+        lastSeenMessageId = null;
+        seenMessageIds.clear();
         saveConfig({ token: result.token, userName: result.userName, userId });
 
         // Register session to get label (custom or sequential) + channel instructions
@@ -1040,6 +1091,11 @@ async function handleToolCall(name, args) {
           connected: true,
         };
         remoteSendSessions.clear(); // satellite tokens are derived from sessionToken
+        // Message ids are global, so a cursor from the previous channel would
+        // skip anything older in this one. Drop it and let the server derive
+        // the anchor from this session's row in the channel it just entered.
+        lastSeenMessageId = null;
+        seenMessageIds.clear();
 
         // Register session to get label (custom or sequential) + channel instructions.
         // The server may suffix a requested label that is already taken in the target
