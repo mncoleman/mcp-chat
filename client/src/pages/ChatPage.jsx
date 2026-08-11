@@ -10,7 +10,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone } from 'lucide-react'
+import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone, PanelLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -29,6 +29,52 @@ const MessageMarkdown = memo(function MessageMarkdown({ content, animate, compon
         {content}
       </ReactMarkdown>
     </MentionAnimateContext.Provider>
+  )
+})
+
+// Agent messages routinely run many paragraphs, so a channel scrolls as a wall of
+// text rather than a list you can scan by author. Every message renders clamped to
+// its first three lines; the toggle only appears when there is more to see.
+//
+// Overflow is measured only while collapsed -- expanding removes the clamp, which
+// would make the element measure as non-overflowing and take the toggle away with
+// it, stranding the message open.
+const CollapsibleMessageBody = memo(function CollapsibleMessageBody({ content, animate, components }) {
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  const bodyRef = useRef(null)
+
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el || expanded) return
+    const measure = () => setOverflows(el.scrollHeight - el.clientHeight > 1)
+    measure()
+    // Re-measure on width changes: the same text clamps differently in a narrow
+    // window, and messages arrive before fonts and images have settled.
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [content, expanded])
+
+  return (
+    <>
+      <div
+        ref={bodyRef}
+        className={cn(!expanded && 'line-clamp-3')}
+      >
+        <MessageMarkdown content={content} animate={animate} components={components} />
+      </div>
+      {overflows && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-0.5 text-xs font-medium underline underline-offset-2 opacity-70 hover:opacity-100"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </>
   )
 })
 
@@ -82,6 +128,8 @@ export default function ChatPage() {
 
   // Channel name + description editor state
   const [editingChannel, setEditingChannel] = useState(false)
+  // Only consulted below md, where the channel list is a slide-over.
+  const [channelListOpen, setChannelListOpen] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [descDraft, setDescDraft] = useState('')
   const [savingChannel, setSavingChannel] = useState(false)
@@ -487,16 +535,36 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full">
-      {/* Channel list sidebar */}
-      <div className="w-60 border-r flex flex-col shrink-0">
-        <div className="p-4 font-semibold text-sm text-muted-foreground uppercase tracking-wider">
+      {/* Channel list. Below md there is no room for it beside the messages, so it
+          becomes a slide-over reached from the header -- hiding it outright would
+          strand a narrow window in whatever channel it opened in. */}
+      {channelListOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={() => setChannelListOpen(false)}
+        />
+      )}
+      <div className={cn(
+        'w-60 border-r flex flex-col shrink-0 bg-background',
+        'max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:transition-transform max-md:duration-200',
+        channelListOpen ? 'max-md:translate-x-0' : 'max-md:-translate-x-full',
+      )}>
+        <div className="flex items-center justify-between p-4 font-semibold text-sm text-muted-foreground uppercase tracking-wider">
           Channels
+          <button
+            type="button"
+            onClick={() => setChannelListOpen(false)}
+            className="md:hidden text-muted-foreground hover:text-foreground"
+            title="Close channel list"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto">
           {channels.map((ch) => (
             <button
               key={ch.id}
-              onClick={() => navigate(`/chat/${ch.id}`)}
+              onClick={() => { navigate(`/chat/${ch.id}`); setChannelListOpen(false) }}
               className={cn(
                 'flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors',
                 String(ch.id) === String(channelId) && 'bg-accent font-medium',
@@ -520,6 +588,14 @@ export default function ChatPage() {
           {/* Channel header */}
           <div className="flex items-center justify-between px-4 h-14 border-b shrink-0">
             <div className="flex items-center gap-2 min-w-0">
+              <button
+                type="button"
+                onClick={() => setChannelListOpen(true)}
+                className="md:hidden text-muted-foreground hover:text-foreground shrink-0"
+                title="Show channels"
+              >
+                <PanelLeft className="h-5 w-5" />
+              </button>
               {channelDetails?.is_private
                 ? <Lock className="h-5 w-5 text-muted-foreground shrink-0" />
                 : <Hash className="h-5 w-5 text-muted-foreground shrink-0" />}
@@ -745,7 +821,7 @@ export default function ChatPage() {
                             ? 'bg-primary text-primary-foreground'
                             : messageTypeStyles[msg.message_type] || 'bg-muted',
                       )}>
-                        <MessageMarkdown
+                        <CollapsibleMessageBody
                           content={msg.content}
                           animate={animateMentions}
                           components={messageMarkdownComponents}
@@ -823,8 +899,14 @@ export default function ChatPage() {
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
           Select a channel to start chatting
+          {/* Below md the list is off-canvas, so the empty state has to offer the
+              way back to it or a narrow window has no route into any channel. */}
+          <Button variant="outline" size="sm" className="md:hidden" onClick={() => setChannelListOpen(true)}>
+            <PanelLeft className="h-4 w-4 mr-2" />
+            Browse channels
+          </Button>
         </div>
       )}
 
