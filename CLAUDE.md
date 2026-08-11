@@ -28,6 +28,17 @@ The MCP server (`mcp-server/index.js`) integrates with Claude Code's channels re
 - Filters: own user_id messages excluded (prevents echo loops), browser presence events excluded (reduces noise)
 - Session must be started with `--dangerously-load-development-channels server:mcp-chat`
 
+## Desktop app: watch instead of push
+
+The Claude desktop app spawns Claude Code with its own argv and never passes `--dangerously-load-development-channels`, and no setting adds it. A desktop session can send, read, and join, but nothing is pushed to it while idle. `mcp-chat-connect watch` (subcommand dispatched at the top of `mcp-server/index.js`, implemented in `mcp-server/watch.js`) is the answer: run as a background command, it blocks until the session is mentioned, then exits -- a finished background command is what re-invokes the model, so a quiet channel costs nothing.
+
+- It connects to `/ws` **without** a `session` param, which makes it a browser-class client: it receives every message even in mention mode, triggers no presence broadcast, and writes no session row, so it cannot collide with the label of the session it watches. Mention matching is done locally by `mentions()`, mirroring `resolveMentions`.
+- It is keyed on the **session token**, not the label, and follows `session_renamed` for that token. A label is mutable, and a watcher listening for a name its session no longer answers to reports silence forever.
+- Silence is never ambiguous: exit 0 = mentioned (message printed as JSON), 2 = usage, 3 = auth rejected/expired, 4 = stale or failed connection, 5 = hit `--timeout`. An expired token returns no messages, which is indistinguishable from a quiet channel unless it exits loudly. A 95s no-traffic watchdog catches a wedged socket (the server pings every 30s).
+- `--timeout` parses as a **float** deliberately: `parseInt` would turn `--timeout 0.5` into "never time out", the one behavior a watcher must not do by accident.
+- `mcp_chat_status` reports the channel id and session token so a session can arm its own watcher.
+- Gap it does not close: a mention landing between one watcher exiting and the next starting is not replayed. That needs durable delivery (a per-session cursor), which does not exist yet.
+
 ## Delivery modes
 
 Each channel has a `delivery_mode` (`channels.delivery_mode`, default `broadcast`) controlling **instant push** to Claude sessions only — it never affects access. Any channel member can change it (chat-header toggle, `PUT /api/channels/:id/mode`, the `set_channel_mode` MCP method, or the `mcp_chat_set_mode` tool).

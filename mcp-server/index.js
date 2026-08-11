@@ -33,6 +33,18 @@ if (!MCP_CHAT_URL) {
 
 const LOCAL_VERSION = require('./package.json').version;
 
+// Subcommand dispatch, before any of the stdio-server setup below runs. `watch`
+// is not an MCP server at all -- it is a blocking wait-for-mention used as a
+// background command by surfaces that cannot receive live pushes (the Claude
+// desktop app, which never passes --dangerously-load-development-channels).
+if (process.argv[2] === 'watch') {
+  require('./watch.js').main(process.argv.slice(3)).catch((err) => {
+    process.stderr.write(`Cannot watch: ${err && err.message ? err.message : err}\n`);
+    process.exit(4);
+  });
+  return;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
@@ -1092,7 +1104,11 @@ async function handleToolCall(name, args) {
       const modeText = sessionState.deliveryMode === 'mention'
         ? `mentions-only (you are pushed only messages that @mention "${sessionState.sessionLabel || 'your session'}"; use mcp_chat_read for the rest)`
         : 'broadcast (you are pushed every message)';
-      let statusText = `Connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'})\nWebSocket: ${wsStatus}\nDelivery: ${modeText}`;
+      // Channel id and session token are reported because a session cannot
+      // otherwise learn its own identity, and both are needed to arm the
+      // background watcher (`mcp-chat-connect watch`) on surfaces that get no
+      // live push.
+      let statusText = `Connected to #${sessionState.channelName} (ID: ${sessionState.channelId}) as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'})\nSession token: ${sessionState.sessionToken}\nWebSocket: ${wsStatus}\nDelivery: ${modeText}`;
       if (sessionState.sessionInstructions) {
         statusText += `\n\nChannel instructions:\n${sessionState.sessionInstructions}`;
       }
