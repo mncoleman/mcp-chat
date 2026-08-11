@@ -23,9 +23,31 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           command_timeout: 15m
           script: |
+            # Without this, a failed step is invisible: the script's exit code is
+            # the LAST command's, so a git pull that refuses to run still ends in
+            # a successful `docker image prune` and the deploy reports green while
+            # rebuilding the same old commit. That is exactly what happened -- the
+            # checkout stopped advancing at v1.8.0 and every deploy after it was a
+            # silent no-op.
+            set -euo pipefail
+
             cd /opt/mcp-chat
             docker system prune -f
-            git pull origin main
+
+            # --ff-only, not a plain pull: if the deploy checkout has diverged from
+            # main, fail loudly here rather than sitting on stale code or resolving
+            # it with a merge nobody reviewed.
+            git fetch origin main
+            git merge --ff-only origin/main
+
+            # Prove the checkout is actually at the commit this run is deploying.
+            DEPLOYED=$(git rev-parse HEAD)
+            echo "Deploying $DEPLOYED"
+            if [ "$DEPLOYED" != "${{ github.sha }}" ]; then
+              echo "Checkout is at $DEPLOYED but this run is for ${{ github.sha }}" >&2
+              exit 1
+            fi
+
             source .env
             docker compose build \
               --build-arg VITE_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
