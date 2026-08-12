@@ -244,8 +244,27 @@ const SEEN_IDS_MAX = 500;
 // of real downtime -- past a blip, worth telling the session about.
 const WS_RECONNECT_WARN_AFTER = 4;
 
+// A socket WE closed on purpose -- replaced by a newer one, or torn down on
+// channel switch/shutdown. Its close event still fires, asynchronously, and
+// without this marker the close handler cannot tell it apart from a connection
+// that dropped underneath us. Marking beats removing the listener: the handler
+// keeps its stderr line, and we stay out of the ws library's own listeners.
+const WS_SUPERSEDED = Symbol('supersededByClient');
+function markSuperseded(ws) {
+  try { ws[WS_SUPERSEDED] = true; } catch {}
+}
+
 function connectWebSocket() {
   if (!sessionState.connected || !sessionState.token || !sessionState.channelId) return;
+
+  // Any pending retry is now redundant -- we are connecting right here. Leaving it
+  // armed is how a second, untracked reconnect chain gets started, and
+  // wsReconnectTimeout holds only the newest one, so every chain but the last
+  // becomes uncancellable.
+  if (wsReconnectTimeout) {
+    clearTimeout(wsReconnectTimeout);
+    wsReconnectTimeout = null;
+  }
 
   // Note: JWT is passed as a query parameter because WebSocket does not support custom headers.
   // Be aware this token may appear in server/proxy access logs.
@@ -256,7 +275,13 @@ function connectWebSocket() {
   const sinceParam = lastSeenMessageId != null ? `&since=${lastSeenMessageId}` : '&replay=1';
   const wsUrl = `${MCP_CHAT_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?token=${sessionState.token}&channel=${sessionState.channelId}&session=${sessionState.sessionToken}${sinceParam}`;
 
+  // Superseding a socket we opened ourselves is a DELIBERATE close, and its close
+  // handler must not read it as a dropped connection. Without this the replacement
+  // socket's own arrival schedules a retry that closes the replacement five seconds
+  // later, which schedules another: a permanent 5s connect/disconnect flap that
+  // broadcasts a presence pair to the whole channel every cycle.
   if (wsConnection) {
+    markSuperseded(wsConnection);
     try { wsConnection.close(); } catch {}
   }
 
@@ -410,6 +435,16 @@ function connectWebSocket() {
   });
 
   ws.on('close', (code) => {
+    // A close we caused is not a connection we lost. Retrying on its behalf
+    // resurrects a link the session deliberately dropped -- and because 'open'
+    // resets wsReconnectAttempts to 0, the backoff never grows out of the loop it
+    // creates. `wsConnection !== ws` catches any socket that reaches here without
+    // the marker (it is always reassigned or nulled before the event fires).
+    if (ws[WS_SUPERSEDED] || wsConnection !== ws) {
+      process.stderr.write(`[mcp-chat] WebSocket closed by client (code ${code}), not reconnecting.\n`);
+      return;
+    }
+
     // 4001 is the server's invalid-token close. Retrying it is pointless -- the
     // token will not become valid -- and worse, the session goes on believing it
     // is connected: sends still fail loudly, but receives fail silently, so a
@@ -447,11 +482,21 @@ function connectWebSocket() {
 }
 
 function disconnectWebSocket() {
-  if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout);
+  if (wsReconnectTimeout) {
+    clearTimeout(wsReconnectTimeout);
+    wsReconnectTimeout = null;
+  }
   if (wsConnection) {
+    // close() is asynchronous: the close event fires AFTER this function returns,
+    // so clearing the timeout above is not enough on its own -- the old handler
+    // would arm a fresh retry that nothing is left to cancel. That is the exact
+    // path by which mcp_chat_join on an already-connected session armed a
+    // permanent reconnect loop. Mark first, then close.
+    markSuperseded(wsConnection);
     try { wsConnection.close(); } catch {}
     wsConnection = null;
   }
+  wsReconnectAttempts = 0;
   // Remove the active-session marker so the status-line wrapper stops reporting.
   // On a channel switch a fresh marker is re-written right after re-registering.
   clearSessionMarker();
