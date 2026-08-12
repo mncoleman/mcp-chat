@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, Children, createContext, useContext, memo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, Children, createContext, useContext, memo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -14,6 +14,11 @@ import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, C
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+// How tall the composer may grow before it stops and scrolls internally. Kept in
+// sync with the max-h-[...] class on the textarea -- the JS clamp is what actually
+// bounds the height, the class is the fallback if the effect has not run yet.
+const COMPOSER_MAX_HEIGHT = 200
 
 // Per-message flag (set by the message list) telling the shared markdown
 // renderer whether this message's @mention chips should play the one-shot pulse.
@@ -452,11 +457,19 @@ export default function ChatPage() {
 
   // Auto-grow the composer textarea with its content, up to a max height (then it
   // scrolls internally). Runs on every input change, incl. clearing after send.
-  useEffect(() => {
+  //
+  // The borders have to be added back. scrollHeight excludes them, but the element
+  // is border-box, so assigning it raw sizes the BORDER box to what the CONTENT
+  // needs and leaves the content area 2px short. That is enough to keep the
+  // textarea permanently scrollable at every length, empty included, which reads
+  // as a fixed one-line window rather than a composer that grows.
+  useLayoutEffect(() => {
     const el = inputRef.current
     if (!el) return
+    const cs = getComputedStyle(el)
+    const borders = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+    el.style.height = `${Math.min(el.scrollHeight + borders, COMPOSER_MAX_HEIGHT)}px`
   }, [input])
 
   // --- @-mention autocomplete ---
