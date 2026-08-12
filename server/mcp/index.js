@@ -5,6 +5,7 @@ const { JWT_SECRET } = require('../middleware/auth');
 const { broadcastToChannel, deliverMessage, resolveMentions } = require('../ws/index');
 const { collectMissed, REPLAY_MAX_MESSAGES } = require('../lib/replay');
 const { withChannelLabelLock, resolveLabel } = require('../lib/session-labels');
+const { MESSAGE_JOINS, REPLY_COLUMNS, resolveReplyTo, attachReplyPreview } = require('../lib/messages');
 
 /**
  * MCP Server endpoint using SSE for server-to-client push
@@ -149,13 +150,19 @@ function setupMcpRoutes(app) {
             return res.status(403).json({ error: 'Not a member of this channel' });
           }
 
+          const sendReply = await resolveReplyTo(pool, channel_id, args.reply_to_id);
+          if (!sendReply.ok) {
+            return res.status(400).json({ error: sendReply.error });
+          }
+
           const result = await pool.query(
-            `INSERT INTO messages (channel_id, user_id, session_id, content, message_type)
-             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [channel_id, user.id, session_token || null, content, message_type]
+            `INSERT INTO messages (channel_id, user_id, session_id, content, message_type, reply_to_id)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [channel_id, user.id, session_token || null, content, message_type, sendReply.replyToId]
           );
           const message = result.rows[0];
           message.user_name = user.name;
+          await attachReplyPreview(pool, message);
 
           // Attach the sender session's label so live messages show which session sent them
           if (session_token) {
@@ -207,11 +214,11 @@ function setupMcpRoutes(app) {
           }
 
           const result = await pool.query(
-            `SELECT m.id, m.content, m.message_type, m.session_id, m.created_at, u.name as user_name,
-                    s.label as session_label
+            `SELECT m.id, m.content, m.message_type, m.session_id, m.created_at, m.reply_to_id,
+                    u.name as user_name, s.label as session_label,
+                    ${REPLY_COLUMNS}
              FROM messages m
-             JOIN users u ON u.id = m.user_id
-             LEFT JOIN sessions s ON s.session_token = m.session_id
+             ${MESSAGE_JOINS}
              WHERE m.channel_id = $1
              ORDER BY m.created_at DESC LIMIT $2`,
             [channel_id, Math.min(parseInt(limit), 100)]

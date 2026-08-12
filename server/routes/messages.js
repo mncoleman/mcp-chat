@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { deliverMessage } = require('../ws/index');
+const { MESSAGE_COLUMNS, MESSAGE_JOINS, resolveReplyTo, attachReplyPreview } = require('../lib/messages');
 
 /**
  * GET /api/channels/:channelId/messages - Get messages for a channel
@@ -33,10 +34,9 @@ router.get('/:channelId/messages', async (req, res) => {
     const parsedLimit = parseInt(limitRaw, 10);
     const params = [req.params.channelId, isNaN(parsedLimit) || parsedLimit < 1 ? 50 : Math.min(parsedLimit, 100)];
     let query = `
-      SELECT m.*, u.name as user_name, u.avatar_url as user_avatar, s.label as session_label
+      SELECT m.*, ${MESSAGE_COLUMNS}
       FROM messages m
-      JOIN users u ON u.id = m.user_id
-      LEFT JOIN sessions s ON s.session_token = m.session_id
+      ${MESSAGE_JOINS}
       WHERE m.channel_id = $1
     `;
     if (before) {
@@ -80,17 +80,20 @@ router.post('/:channelId/messages', async (req, res) => {
       }
     }
 
-    const { content, message_type = 'info', session_id, metadata } = req.body;
+    const { content, message_type = 'info', session_id, metadata, reply_to_id } = req.body;
     if (!content || typeof content !== 'string') return res.status(400).json({ error: 'content is required' });
     if (content.length > 10000) return res.status(400).json({ error: 'Message too long (max 10000 characters)' });
     const validTypes = ['info', 'recommendation', 'status', 'system'];
     if (!validTypes.includes(message_type)) return res.status(400).json({ error: 'Invalid message_type' });
 
+    const reply = await resolveReplyTo(pool, req.params.channelId, reply_to_id);
+    if (!reply.ok) return res.status(400).json({ error: reply.error });
+
     const result = await pool.query(
-      `INSERT INTO messages (channel_id, user_id, session_id, content, message_type, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO messages (channel_id, user_id, session_id, content, message_type, metadata, reply_to_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [req.params.channelId, req.user.id, session_id || null, content, message_type, JSON.stringify(metadata || {})]
+      [req.params.channelId, req.user.id, session_id || null, content, message_type, JSON.stringify(metadata || {}), reply.replyToId]
     );
 
     const message = result.rows[0];
@@ -103,6 +106,10 @@ router.post('/:channelId/messages', async (req, res) => {
       const labelResult = await pool.query('SELECT label FROM sessions WHERE session_token = $1', [message.session_id]);
       message.session_label = labelResult.rows[0]?.label || null;
     }
+
+    // Quote the parent on the live frame too, or a reply reads as a bare message
+    // until someone reloads history.
+    await attachReplyPreview(pool, message);
 
     // Deliver via WebSocket, honoring the channel's delivery mode
     // (broadcast to all, or push only to @-mentioned sessions).

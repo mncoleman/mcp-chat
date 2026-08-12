@@ -39,6 +39,10 @@
 // AGE (24h) is the point past which a backlog stops being actionable. A broadcast
 // message a day old is noise; an unanswered @mention a day old is at the edge of
 // still being worth acting on. One bound covers both rather than splitting it.
+// Shared with every other read path. A replayed message must be shaped exactly
+// like the live one it stands in for, quoted parent included.
+const { MESSAGE_COLUMNS, MESSAGE_JOINS } = require('./messages');
+
 const REPLAY_MAX_MESSAGES = 50;
 const REPLAY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -121,10 +125,9 @@ async function collectMissed(db, { channelId, sessionToken, sinceId, sessionRow,
 
   // Fetch one extra row to distinguish "exactly at the bound" from "more waiting".
   const { rows } = await db.query(
-    `SELECT m.*, u.name AS user_name, s.label AS session_label
+    `SELECT m.*, ${MESSAGE_COLUMNS}
      FROM messages m
-     JOIN users u ON u.id = m.user_id
-     LEFT JOIN sessions s ON s.session_token = m.session_id
+     ${MESSAGE_JOINS}
      WHERE m.channel_id = $1 AND m.id > $2 AND m.created_at >= $3
      ORDER BY m.id ASC
      LIMIT $4`,

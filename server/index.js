@@ -45,6 +45,18 @@ pool.query(`ALTER TABLE channels ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT
 pool.query(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_remaining_pct INTEGER`)
   .catch(err => console.error('Migration error:', err.message));
 
+// Reply target. ON DELETE SET NULL rather than CASCADE: deleting a message must
+// not silently take every answer to it with it. A reply whose parent is gone
+// degrades to an ordinary message, which is why every read path LEFT JOINs the
+// parent instead of requiring it.
+//
+// This has to run here, not in schema.sql. schema.sql is mounted at
+// /docker-entrypoint-initdb.d and Postgres runs that ONLY on an empty data
+// directory, so on the live database it never executes -- a column added only
+// there would exist locally and be missing in production.
+pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL`)
+  .catch(err => console.error('Migration error:', err.message));
+
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 4000;

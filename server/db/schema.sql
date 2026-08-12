@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   message_type TEXT NOT NULL DEFAULT 'info' CHECK (message_type IN ('info', 'recommendation', 'status', 'system')),
   metadata JSONB DEFAULT '{}',
+  reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

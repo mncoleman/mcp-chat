@@ -4,6 +4,7 @@ const pool = require('../db/pool');
 const { JWT_SECRET } = require('../middleware/auth');
 const mentions = require('../lib/mentions');
 const { collectMissed } = require('../lib/replay');
+const { resolveReplyTo, attachReplyPreview } = require('../lib/messages');
 
 // Track connected clients: Map<channelId, Set<{ws, userId, sessionId}>>
 const channelClients = new Map();
@@ -125,13 +126,20 @@ function setupWebSocket(server) {
           const validTypes = ['info', 'recommendation', 'status', 'system'];
           const messageType = validTypes.includes(data.message_type) ? data.message_type : 'info';
 
+          const reply = await resolveReplyTo(pool, channelId, data.reply_to_id);
+          if (!reply.ok) {
+            ws.send(JSON.stringify({ type: 'error', error: reply.error }));
+            return;
+          }
+
           const result = await pool.query(
-            `INSERT INTO messages (channel_id, user_id, session_id, content, message_type, metadata)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [channelId, user.id, sessionToken || null, data.content, messageType, JSON.stringify(data.metadata || {})]
+            `INSERT INTO messages (channel_id, user_id, session_id, content, message_type, metadata, reply_to_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            [channelId, user.id, sessionToken || null, data.content, messageType, JSON.stringify(data.metadata || {}), reply.replyToId]
           );
           const message = result.rows[0];
           message.user_name = user.name;
+          await attachReplyPreview(pool, message);
           await deliverMessage(channelId, message);
         } else if (data.type === 'ping') {
           ws.send(JSON.stringify({ type: 'pong' }));

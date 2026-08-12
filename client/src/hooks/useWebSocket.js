@@ -132,9 +132,16 @@ export function useWebSocket(channelId, { onSessionPresenceChange, onInstruction
     }
   }, [connect])
 
-  const sendMessage = useCallback((content, messageType = 'info') => {
+  // replyToId is omitted from the frame rather than sent as null when absent, so
+  // an ordinary message is byte-identical to what this sent before replies existed.
+  const sendMessage = useCallback((content, messageType = 'info', replyToId = null) => {
     if (wsRef.current?.readyState === 1) {
-      wsRef.current.send(JSON.stringify({ type: 'message', content, message_type: messageType }))
+      wsRef.current.send(JSON.stringify({
+        type: 'message',
+        content,
+        message_type: messageType,
+        ...(replyToId ? { reply_to_id: replyToId } : {}),
+      }))
     }
   }, [])
 

@@ -637,13 +637,14 @@ function getTools() {
           content: { type: 'string', description: 'Message content' },
           message_type: { type: 'string', enum: ['info', 'recommendation', 'status'], description: 'Type of message (default: info)' },
           channel_id: { type: 'number', description: 'Channel ID to post into (defaults to your connected channel). Must be a channel you are a member of.' },
+          reply_to_id: { type: 'number', description: 'Reply to a specific message, attaching your answer to it. Pass the id shown as #N by mcp_chat_read. Must be a message in the same channel you are posting to.' },
         },
         required: ['content'],
       },
     },
     {
       name: 'mcp_chat_read',
-      description: 'Read recent messages from an MCP Chat channel. Defaults to your connected channel; pass channel_id to read any other channel you are a member of without joining it (this does not switch your connection).',
+      description: 'Read recent messages from an MCP Chat channel. Each message is prefixed with its id as #N -- pass that as reply_to_id on mcp_chat_send to answer it directly. Defaults to your connected channel; pass channel_id to read any other channel you are a member of without joining it (this does not switch your connection).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1145,11 +1146,23 @@ async function handleToolCall(name, args) {
       const identity = await resolveSendIdentity(target);
       if (identity.error) return { content: [{ type: 'text', text: `Error: ${identity.error}` }], isError: true };
 
+      // Omitted rather than sent as null when absent: the server treats an absent
+      // reply_to_id as "not a reply", and sending null on every ordinary message
+      // would put a nullable field through the same-channel validation path for
+      // no reason.
+      const replyToId = args.reply_to_id === undefined || args.reply_to_id === null
+        ? undefined
+        : parseInt(args.reply_to_id, 10);
+      if (replyToId !== undefined && isNaN(replyToId)) {
+        return { content: [{ type: 'text', text: 'reply_to_id must be a message id (the number shown as #N by mcp_chat_read).' }], isError: true };
+      }
+
       const result = await apiCall('send_message', {
         channel_id: target.id,
         content,
         message_type: messageType,
         session_token: identity.sessionToken,
+        ...(replyToId !== undefined ? { reply_to_id: replyToId } : {}),
       }, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
       const sendNote = target.id === sessionState.channelId
@@ -1177,7 +1190,13 @@ async function handleToolCall(name, args) {
         const sender = m.session_id
           ? `${m.user_name?.split(' ')[0]}'s Claude${m.session_label ? ` (${m.session_label})` : ''}`
           : m.user_name;
-        return `[${new Date(m.created_at).toLocaleTimeString()}] ${sender}: ${m.content}`;
+        // The id is what makes a message targetable. Without it in the output a
+        // session can read a channel but has no handle to reply to anything in it.
+        const id = m.id ? `#${m.id} ` : '';
+        const replyMark = m.reply_to_id
+          ? ` [replying to #${m.reply_to_id}: "${String(m.reply_to_content || '').slice(0, 60)}..."]`
+          : '';
+        return `${id}[${new Date(m.created_at).toLocaleTimeString()}] ${sender}${replyMark}: ${m.content}`;
       }).join('\n');
       const readHeader = target.id === sessionState.channelId
         ? `Messages in #${target.name}:`

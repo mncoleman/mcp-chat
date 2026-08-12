@@ -10,7 +10,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone, PanelLeft, ListFilter, User } from 'lucide-react'
+import { Send, Hash, Lock, Wifi, WifiOff, Monitor, Terminal, FileText, Pencil, Check, X, AtSign, Megaphone, PanelLeft, ListFilter, User, CornerUpLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -19,6 +19,16 @@ import remarkGfm from 'remark-gfm'
 // sync with the max-h-[...] class on the textarea -- the JS clamp is what actually
 // bounds the height, the class is the fallback if the effect has not run yet.
 const COMPOSER_MAX_HEIGHT = 200
+
+// How a quoted parent names its author. Mirrors the message-list header so the
+// quote and the original read as the same person, rather than a session appearing
+// under its human's bare name once it is quoted.
+function quotedAuthorName(msg) {
+  if (msg.reply_to_session_label) {
+    return `${msg.reply_to_user_name?.split(' ')[0]}'s Claude (${msg.reply_to_session_label})`
+  }
+  return msg.reply_to_user_name || 'Unknown'
+}
 
 // Per-message flag (set by the message list) telling the shared markdown
 // renderer whether this message's @mention chips should play the one-shot pulse.
@@ -136,6 +146,10 @@ export default function ChatPage() {
   // so a rename keeps the filter pointed at the same session, and the label
   // shown resolves through sessionLabelMap like every other label on the page.
   const [participantFilter, setParticipantFilter] = useState(null)
+  // The message this composer is answering, or null. Holds the whole message
+  // rather than an id so the strip above the composer can quote it without a
+  // second lookup into a list the filter may have narrowed.
+  const [replyTo, setReplyTo] = useState(null)
   const [showParticipants, setShowParticipants] = useState(false)
 
   // Channel name + description editor state
@@ -235,6 +249,10 @@ export default function ChatPage() {
     filterChannelRef.current = channelId
     if (participantFilter) setParticipantFilter(null)
     if (showParticipants) setShowParticipants(false)
+    // A reply target is a message id, and ids are global rather than per-channel,
+    // so a target left over from the previous channel would be rejected by the
+    // server's same-channel check on send -- after the user had already typed.
+    if (replyTo) setReplyTo(null)
   }
 
   // Everyone who can be filtered to: channel members plus anyone who has spoken.
@@ -450,10 +468,25 @@ export default function ChatPage() {
   const handleSend = (e) => {
     e?.preventDefault?.()
     if (!input.trim()) return
-    sendMessage(input.trim())
+    sendMessage(input.trim(), 'info', replyTo?.id ?? null)
     setInput('')
     setMention(null)
+    setReplyTo(null)
   }
+
+  // Scroll a quoted parent back into view and mark it briefly. The parent may not
+  // be on screen at all: history is paged, and a participant filter can hide it.
+  // Say so rather than doing nothing, which reads as a broken control.
+  const jumpToMessage = useCallback((id) => {
+    const el = document.getElementById(`msg-${id}`)
+    if (!el) {
+      toast.info('That message is not in the loaded history, or the current filter hides it')
+      return
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('bg-primary/10', 'rounded-2xl')
+    setTimeout(() => el.classList.remove('bg-primary/10', 'rounded-2xl'), 1600)
+  }, [])
 
   // Auto-grow the composer textarea with its content, up to a max height (then it
   // scrolls internally). Runs on every input change, incl. clearing after send.
@@ -976,8 +1009,8 @@ export default function ChatPage() {
                 const animateMentions = shouldAnimateMention(msg)
 
                 return (
-                  <div key={msg.id || `ws-${i}`} className={cn(
-                    'flex gap-2',
+                  <div key={msg.id || `ws-${i}`} id={msg.id ? `msg-${msg.id}` : undefined} className={cn(
+                    'group flex gap-2 transition-colors',
                     isOwn && !isFromClaude && 'flex-row-reverse',
                     showHeader ? 'mt-4 first:mt-0' : 'mt-0.5',
                   )}>
@@ -1006,6 +1039,27 @@ export default function ChatPage() {
                           </span>
                         </div>
                       )}
+                      {/* What this message is answering. reply_to_id is nulled by the
+                          FK if the parent is deleted, so a rendered quote always has
+                          a parent -- but content is still guarded, since a filter or
+                          an unpaged history can leave the target unreachable. */}
+                      {msg.reply_to_id && (
+                        <button
+                          type="button"
+                          onClick={() => jumpToMessage(msg.reply_to_id)}
+                          className="mb-0.5 flex w-full max-w-full items-start gap-1.5 rounded-lg border-l-2 border-muted-foreground/30 bg-muted/40 px-2 py-1 text-left text-xs hover:bg-muted/70"
+                        >
+                          <CornerUpLeft className="h-3 w-3 shrink-0 mt-0.5 text-muted-foreground" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block font-medium">{quotedAuthorName(msg)}</span>
+                            <span className="block truncate text-muted-foreground">
+                              {msg.reply_to_content
+                                ? `${msg.reply_to_content}${msg.reply_to_truncated ? '...' : ''}`
+                                : 'Original message unavailable'}
+                            </span>
+                          </span>
+                        </button>
+                      )}
                       <div className={cn(
                         'inline-block rounded-2xl px-3 py-1 text-sm leading-snug break-words text-left',
                         isFromClaude
@@ -1024,6 +1078,21 @@ export default function ChatPage() {
                         <Badge variant="outline" className="mt-0.5 text-[10px]">{msg.message_type}</Badge>
                       )}
                     </div>
+                    {/* Only messages that have come back from the server can be
+                        replied to: an optimistic row has no id to target yet.
+                        focus-visible keeps it reachable without a mouse, since
+                        hover alone would hide it from keyboard users entirely. */}
+                    {msg.id && (
+                      <button
+                        type="button"
+                        onClick={() => setReplyTo(msg)}
+                        aria-label="Reply to this message"
+                        title="Reply to this message"
+                        className="self-center shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                      >
+                        <CornerUpLeft className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 )
               })}
@@ -1083,6 +1152,27 @@ export default function ChatPage() {
                       )}
                     </button>
                   ))}
+                </div>
+              )}
+              {replyTo && (
+                <div className="mb-1.5 flex items-start gap-2 rounded-md border bg-muted/50 px-2.5 py-1.5 text-xs">
+                  <CornerUpLeft className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">
+                      Replying to {replyTo.session_id
+                        ? `${replyTo.user_name?.split(' ')[0]}'s Claude${sessionLabelMap[replyTo.session_id] ? ` (${sessionLabelMap[replyTo.session_id]})` : ''}`
+                        : replyTo.user_name}
+                    </div>
+                    <div className="truncate text-muted-foreground">{replyTo.content}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(null)}
+                    aria-label="Cancel reply"
+                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
               <form onSubmit={handleSend} className="flex items-end gap-2">
