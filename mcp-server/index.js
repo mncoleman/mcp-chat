@@ -418,7 +418,7 @@ function connectWebSocket() {
     if (code === 4001 || code === 1008) {
       sessionState.wsAuthFailed = true;
       process.stderr.write('[mcp-chat] WebSocket rejected: token expired or revoked. Not retrying.\n');
-      pushChannelMessage('mcp-chat', `Live delivery for #${sessionState.channelName} has STOPPED: the saved MCP Chat token was rejected (expired or revoked). You are no longer being pushed messages, and silence from this channel now means nothing. Run mcp_chat_connect to re-authenticate.`, {
+      pushChannelMessage('mcp-chat', `Live delivery for #${sessionState.channelName} has STOPPED: the saved MCP Chat token was rejected (expired or revoked). You are no longer being pushed messages, and silence from this channel now means nothing. Run mcp_chat_join with authorize: true to re-authenticate.`, {
         channel: sessionState.channelName,
         event: 'auth_failed',
       });
@@ -433,7 +433,7 @@ function connectWebSocket() {
     const delay = Math.min(5000 * 2 ** (wsReconnectAttempts - 1), 60000);
     process.stderr.write(`[mcp-chat] WebSocket disconnected (code ${code}), reconnecting in ${delay / 1000}s (attempt ${wsReconnectAttempts})...\n`);
     if (wsReconnectAttempts === WS_RECONNECT_WARN_AFTER) {
-      pushChannelMessage('mcp-chat', `Live delivery for #${sessionState.channelName} has been down for several minutes and is still retrying. Messages sent in the meantime are not being pushed to you. Use mcp_chat_read to catch up, and mcp_chat_status to check the connection.`, {
+      pushChannelMessage('mcp-chat', `Live delivery for #${sessionState.channelName} has been down for several minutes and is still retrying. Messages sent in the meantime are not being pushed to you. Use mcp_chat_read to catch up, and mcp_chat_join (no arguments) to check the connection.`, {
         channel: sessionState.channelName,
         event: 'delivery_degraded',
       });
@@ -616,14 +616,16 @@ function sendError(id, code, message) {
 function getTools() {
   return [
     {
-      name: 'mcp_chat_connect',
+      name: 'mcp_chat_join',
       description: sessionState.connected
-        ? `Currently connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'}). Live messages are being pushed into this session. Run again to switch channels.`
-        : 'Connect to MCP Chat. Opens your browser to authenticate and select a channel. Once connected, messages will be pushed into this session in real-time. Optionally pass a label to name this session.',
+        ? `Connected to #${sessionState.channelName} as ${sessionState.userName} (${sessionState.sessionLabel || 'Session'}); live messages are being pushed here. Call with no arguments for status and your channel list, or with channel_id to switch channels.`
+        : 'Connect to a channel, or call with no arguments to see your connection status and the channels you belong to. Pass channel_id to join a specific channel, or authorize: true the first time to sign in via your browser. Once joined, messages are pushed into this session in real-time.',
       inputSchema: {
         type: 'object',
         properties: {
-          label: { type: 'string', description: 'Optional name for this session (e.g. "Backend Dev", "QA"). Defaults to a sequential "Session N".' },
+          channel_id: { type: 'number', description: 'Channel to join. Omit to report status and list your channels without changing anything.' },
+          label: { type: 'string', description: 'Optional name for this session (e.g. "Backend Dev", "QA"). Defaults to a sequential "Session N". A name you choose follows you across channels.' },
+          authorize: { type: 'boolean', description: 'Open the browser to sign in. Only needed the first time, or after your saved token expires.' },
         },
         required: [],
       },
@@ -664,106 +666,68 @@ function getTools() {
       },
     },
     {
-      name: 'mcp_chat_channels',
-      description: 'List all MCP Chat channels you are a member of.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'mcp_chat_status',
-      description: 'Check your current MCP Chat connection status.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'mcp_chat_join',
-      description: 'Connect to a specific MCP Chat channel by ID without opening a browser. Requires prior authentication (saved token from a previous mcp_chat_connect). Used by agents to join channels created by the parent session.',
+      name: 'mcp_chat_manage',
+      description: "Administer a channel or your own session. Pick an action: 'create_channel' (you become admin; is_private makes it invite-only), 'add_member' (channel admin; by user_id or email), 'modify_channel' (channel admin; name/description/is_private), 'set_name' (rename your own session; the name follows you across channels), 'get_instructions' / 'set_instructions' (the channel's shared system prompt, any member, empty string clears), 'set_mode' ('broadcast' pushes every message to every session, 'mention' pushes only to @<session-name>-mentioned sessions; browsers always see everything).",
       inputSchema: {
         type: 'object',
         properties: {
-          channel_id: { type: 'number', description: 'Channel ID to join' },
-          label: { type: 'string', description: 'Custom session label (e.g. "QA Agent", "Security Checker"). Defaults to sequential "Session N".' },
+          action: {
+            type: 'string',
+            enum: ['create_channel', 'add_member', 'modify_channel', 'set_name', 'get_instructions', 'set_instructions', 'set_mode'],
+            description: 'What to do.',
+          },
+          channel_id: { type: 'number', description: 'Channel to act on (defaults to your connected channel). Used by add_member and modify_channel.' },
+          name: { type: 'string', description: 'For create_channel and modify_channel, the channel name. For set_name, the name for this session.' },
+          description: { type: 'string', description: 'Channel description, for create_channel and modify_channel.' },
+          member_ids: { type: 'array', items: { type: 'number' }, description: 'User IDs to add as members, for create_channel.' },
+          is_private: { type: 'boolean', description: 'Invite-only: hidden from and inaccessible to non-members, including admins. For create_channel and modify_channel.' },
+          user_id: { type: 'number', description: 'User to add, for add_member.' },
+          email: { type: 'string', description: 'Email of the user to add, for add_member (alternative to user_id).' },
+          instructions: { type: 'string', description: "The channel's shared instructions, for set_instructions. Empty string clears them." },
+          mode: { type: 'string', enum: ['broadcast', 'mention'], description: "Delivery mode, for set_mode." },
         },
-        required: ['channel_id'],
-      },
-    },
-    {
-      name: 'mcp_chat_create_channel',
-      description: 'Create a new MCP Chat channel. You become the admin. Set is_private to make it invite-only (hidden from and inaccessible to non-members, including admins).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'Channel name' },
-          description: { type: 'string', description: 'Channel description' },
-          member_ids: { type: 'array', items: { type: 'number' }, description: 'User IDs to add as members' },
-          is_private: { type: 'boolean', description: 'If true, the channel is private: only invited members can see or access it (default false)' },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'mcp_chat_add_member',
-      description: 'Add a user to a channel (requires channel admin). Specify user by ID or email.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          channel_id: { type: 'number', description: 'Channel ID (defaults to connected channel)' },
-          user_id: { type: 'number', description: 'User ID to add' },
-          email: { type: 'string', description: 'Email of user to add (alternative to user_id)' },
-        },
-      },
-    },
-    {
-      name: 'mcp_chat_modify_channel',
-      description: 'Update a channel name, description, and/or privacy (requires channel admin).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          channel_id: { type: 'number', description: 'Channel ID (defaults to connected channel)' },
-          name: { type: 'string', description: 'New channel name' },
-          description: { type: 'string', description: 'New channel description' },
-          is_private: { type: 'boolean', description: 'Set true to make the channel private (invite-only), false to make it public' },
-        },
-      },
-    },
-    {
-      name: 'mcp_chat_set_name',
-      description: 'Set or change the name of your own session. Other participants (and you) will see this name on every message you send.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'The name for this session (e.g. "Backend Dev", "QA Agent").' },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'mcp_chat_instructions',
-      description: 'Show the current channel instructions (a shared system prompt set for everyone in the channel).',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'mcp_chat_set_instructions',
-      description: 'Set the channel instructions: a shared system prompt that every connected session in the channel sees. Pass an empty string to clear. Any channel member can set these.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          instructions: { type: 'string', description: 'The shared instructions for the channel. Empty string clears them.' },
-        },
-        required: ['instructions'],
-      },
-    },
-    {
-      name: 'mcp_chat_set_mode',
-      description: "Set the channel's delivery mode (any member). 'broadcast' pushes every message to every connected session; 'mention' pushes only to sessions that are @<session-name>-mentioned (others can still mcp_chat_read). Browsers always see every message either way.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          mode: { type: 'string', enum: ['broadcast', 'mention'], description: "'broadcast' or 'mention'" },
-        },
-        required: ['mode'],
+        required: ['action'],
       },
     },
   ];
 }
+
+/**
+ * Public action name -> the internal handler that already implements it.
+ *
+ * The handlers are unchanged and still keyed by their original names. That is
+ * deliberate: several carry side effects that an action-enum rewrite is exactly
+ * the kind of refactor that loses. set_name, for one, sets the flag that makes a
+ * chosen name follow the session across joins -- rename the case body and that
+ * behaviour goes quiet rather than failing.
+ */
+/**
+ * Names removed in 2.0.0, and where their behaviour went. Callers include live
+ * channel `instructions` rows and shell aliases written months ago, none of which
+ * this release can reach -- so the error has to carry the migration itself.
+ */
+const RETIRED_TOOLS = {
+  mcp_chat_connect: "Use mcp_chat_join with authorize: true to sign in, or with a channel_id to switch channels.",
+  mcp_chat_status: 'Use mcp_chat_join with no arguments.',
+  mcp_chat_channels: 'Use mcp_chat_join with no arguments; it lists your channels alongside your status.',
+  mcp_chat_create_channel: "Use mcp_chat_manage with action: 'create_channel'.",
+  mcp_chat_add_member: "Use mcp_chat_manage with action: 'add_member'.",
+  mcp_chat_modify_channel: "Use mcp_chat_manage with action: 'modify_channel'.",
+  mcp_chat_set_name: "Use mcp_chat_manage with action: 'set_name'.",
+  mcp_chat_instructions: "Use mcp_chat_manage with action: 'get_instructions'.",
+  mcp_chat_set_instructions: "Use mcp_chat_manage with action: 'set_instructions'.",
+  mcp_chat_set_mode: "Use mcp_chat_manage with action: 'set_mode'.",
+};
+
+const MANAGE_ACTIONS = {
+  create_channel: 'mcp_chat_create_channel',
+  add_member: 'mcp_chat_add_member',
+  modify_channel: 'mcp_chat_modify_channel',
+  set_name: 'mcp_chat_set_name',
+  get_instructions: 'mcp_chat_instructions',
+  set_instructions: 'mcp_chat_set_instructions',
+  set_mode: 'mcp_chat_set_mode',
+};
 
 // ─── MCP resource: status-line wrapper + one-time install guide ──────────────
 
@@ -863,7 +827,7 @@ ${scriptBlock}
 async function resolveChannel(channelIdArg) {
   if (channelIdArg === undefined || channelIdArg === null || channelIdArg === '') {
     if (!sessionState.connected) {
-      return { error: 'Not connected. Run mcp_chat_connect first, or pass channel_id to read a specific channel.' };
+      return { error: 'Not connected. Run mcp_chat_join first, or pass channel_id to read a specific channel.' };
     }
     return { id: sessionState.channelId, name: sessionState.channelName };
   }
@@ -876,7 +840,7 @@ async function resolveChannel(channelIdArg) {
     return { id: channelId, name: sessionState.channelName }; // already resolved; skip the roundtrip
   }
   if (!sessionState.token) {
-    return { error: 'Not authenticated. Run mcp_chat_connect first.' };
+    return { error: 'Not authenticated. Run mcp_chat_join with authorize: true first.' };
   }
 
   const channelsResult = await apiCall('list_channels', {}, sessionState.token);
@@ -908,7 +872,7 @@ const remoteSendSessions = new Map();
 async function resolveSendIdentity(target) {
   if (target.id === sessionState.channelId) {
     if (!sessionState.connected) {
-      return { error: 'Not connected. Run mcp_chat_connect first, or pass channel_id to post into a specific channel.' };
+      return { error: 'Not connected. Run mcp_chat_join first, or pass channel_id to post into a specific channel.' };
     }
     return { sessionToken: sessionState.sessionToken, label: sessionState.sessionLabel };
   }
@@ -917,7 +881,7 @@ async function resolveSendIdentity(target) {
   if (cached) return cached;
 
   if (!sessionState.sessionToken) {
-    return { error: 'No session identity yet. Run mcp_chat_connect or mcp_chat_join first.' };
+    return { error: 'No session identity yet. Run mcp_chat_join first.' };
   }
 
   const remoteToken = `${sessionState.sessionToken}-ch${target.id}`;
@@ -963,12 +927,96 @@ function validateToolArgs(name, args) {
   return `Unknown argument${unknown.length > 1 ? 's' : ''} for ${name}: ${unknown.join(', ')}. Accepted arguments: ${accepted}.`;
 }
 
+/**
+ * Public tool surface (5 tools) on top of the internal handlers (14).
+ *
+ * Every session that registers this server loads every advertised tool into its
+ * context whether or not it ever uses chat, so the surface is the cost. The
+ * handlers below are untouched -- only what is advertised changed -- because the
+ * risk in this refactor was never the routing, it was losing a side effect
+ * buried in a handler nobody re-read.
+ */
 async function handleToolCall(name, args) {
   const argError = validateToolArgs(name, args);
   if (argError) {
     return { content: [{ type: 'text', text: argError }], isError: true };
   }
 
+  switch (name) {
+    case 'mcp_chat_join': {
+      // Explicitly authorizing is the ONLY path that opens a browser. Asking
+      // "am I connected?" must never pop one: status is how a session learns its
+      // own channel id and token to arm a watcher, and how it tells a rejected
+      // token from a reconnect in progress. A read that has a side effect is not
+      // a read anyone can safely call.
+      if (args?.authorize) {
+        return dispatchTool('mcp_chat_connect', { label: args.label });
+      }
+      if (args?.channel_id !== undefined && args?.channel_id !== null) {
+        return dispatchTool('mcp_chat_join', { channel_id: args.channel_id, label: args.label });
+      }
+      if (!sessionState.token) {
+        return {
+          content: [{
+            type: 'text',
+            text: 'Not connected, and there are no saved credentials on this machine.\n\nRun mcp_chat_join with authorize: true to sign in (this opens your browser).',
+          }],
+        };
+      }
+      // Status and the channel list answer one question -- "where am I and where
+      // could I go" -- and were two tools purely because they were written apart.
+      const status = await dispatchTool('mcp_chat_status', {});
+      const channels = await dispatchTool('mcp_chat_channels', {});
+      return {
+        content: [{ type: 'text', text: `${status.content[0].text}\n\n${channels.content[0].text}` }],
+      };
+    }
+
+    case 'mcp_chat_manage': {
+      const internal = MANAGE_ACTIONS[args?.action];
+      if (!internal) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Unknown action: ${args?.action}. Valid actions: ${Object.keys(MANAGE_ACTIONS).join(', ')}.`,
+          }],
+          isError: true,
+        };
+      }
+      const { action, ...rest } = args || {};
+      return dispatchTool(internal, rest);
+    }
+
+    default: {
+      // A retired name must fail loudly, not quietly work. Two reasons: the
+      // internal handlers are still present, so an old name would otherwise fall
+      // straight through and keep functioning, which is not the clean break this
+      // release claims; and validateToolArgs only validates ADVERTISED tools, so
+      // anything arriving under an unadvertised name gets its arguments accepted
+      // unchecked -- the exact silent-drop class that mcp_chat_read's channel bug
+      // came from. Naming the replacement makes the migration a one-line fix.
+      if (!getTools().some(t => t.name === name)) {
+        const hint = RETIRED_TOOLS[name];
+        return {
+          content: [{
+            type: 'text',
+            text: hint
+              ? `${name} no longer exists in mcp-chat-connect 2.x. ${hint}`
+              : `Unknown tool: ${name}. Available tools: ${getTools().map(t => t.name).join(', ')}.`,
+          }],
+          isError: true,
+        };
+      }
+      return dispatchTool(name, args);
+    }
+  }
+}
+
+/**
+ * The internal handlers. Reached only through handleToolCall, which has already
+ * validated the caller's arguments against the advertised schema.
+ */
+async function dispatchTool(name, args) {
   switch (name) {
     case 'mcp_chat_connect': {
       try {
@@ -1029,7 +1077,7 @@ async function handleToolCall(name, args) {
 
         // Check for package updates
         const updateNotice = await checkForUpdate();
-        let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Your session is named "${sessionLabel}" -- this name appears on every message you send. Use mcp_chat_set_name to change it. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
+        let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Your session is named "${sessionLabel}" -- this name appears on every message you send. Use mcp_chat_manage with action 'set_name' to change it. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
         responseText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.`;
         if (sessionState.deliveryMode === 'mention') {
           responseText += deliveryModeNotice(sessionLabel);
@@ -1049,7 +1097,7 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_join': {
       if (!sessionState.token) {
-        return { content: [{ type: 'text', text: 'Not authenticated. A user must run mcp_chat_connect first to save credentials.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not authenticated. A user must run mcp_chat_join with authorize: true first to save credentials.' }], isError: true };
       }
       const channelId = parseInt(args.channel_id, 10);
       if (!channelId || isNaN(channelId)) {
@@ -1121,7 +1169,7 @@ async function handleToolCall(name, args) {
         // wrapper can report context for this session.
         sweepStaleMarkers();
         writeSessionMarker();
-        let joinText = `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Your session is named "${sessionLabel}"; use mcp_chat_set_name to change it. Live messages are now being pushed.`;
+        let joinText = `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Your session is named "${sessionLabel}"; use mcp_chat_manage with action 'set_name' to change it. Live messages are now being pushed.`;
         joinText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.`;
         if (sessionState.deliveryMode === 'mention') {
           joinText += deliveryModeNotice(sessionLabel);
@@ -1235,7 +1283,7 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_channels': {
       if (!sessionState.token) {
-        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_join with authorize: true first.' }], isError: true };
       }
       const result = await apiCall('list_channels', {}, sessionState.token);
       if (result.error) return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
@@ -1248,12 +1296,12 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_status': {
       if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_connect or mcp_chat_join to pick a channel.' : 'Not connected. Run mcp_chat_connect to authenticate and select a channel.' }] };
+        return { content: [{ type: 'text', text: sessionState.token ? 'Authenticated but not connected to a channel. Run mcp_chat_join with a channel_id to pick one.' : 'Not connected. Run mcp_chat_join with authorize: true to sign in and pick a channel.' }] };
       }
       // Do not report a wedged or rejected socket as "reconnecting" -- that reads
       // as temporary, and an expired token never recovers on its own.
       const wsStatus = sessionState.wsAuthFailed
-        ? 'NOT receiving: token rejected (expired or revoked). Run mcp_chat_connect to re-authenticate.'
+        ? 'NOT receiving: token rejected (expired or revoked). Run mcp_chat_join with authorize: true to re-authenticate.'
         : wsConnection?.readyState === 1
           ? 'live (receiving messages)'
           : `not receiving, reconnecting (attempt ${wsReconnectAttempts})`;
@@ -1273,7 +1321,7 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_create_channel': {
       if (!sessionState.token) {
-        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_join with authorize: true first.' }], isError: true };
       }
       const channelName = String(args.name || '').trim();
       if (!channelName) return { content: [{ type: 'text', text: 'Channel name is required.' }], isError: true };
@@ -1289,7 +1337,7 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_add_member': {
       if (!sessionState.token) {
-        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_join with authorize: true first.' }], isError: true };
       }
       const channelId = args.channel_id || sessionState.channelId;
       if (!channelId) return { content: [{ type: 'text', text: 'No channel specified and not connected to one.' }], isError: true };
@@ -1305,7 +1353,7 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_modify_channel': {
       if (!sessionState.token) {
-        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not authenticated. Run mcp_chat_join with authorize: true first.' }], isError: true };
       }
       const channelId = args.channel_id || sessionState.channelId;
       if (!channelId) return { content: [{ type: 'text', text: 'No channel specified and not connected to one.' }], isError: true };
@@ -1321,7 +1369,7 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_set_name': {
       if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_join first.' }], isError: true };
       }
       const newName = String(args.name || '').trim().slice(0, 100);
       if (!newName) return { content: [{ type: 'text', text: 'A name is required.' }], isError: true };
@@ -1346,17 +1394,17 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_instructions': {
       if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_join first.' }], isError: true };
       }
       if (!sessionState.sessionInstructions) {
-        return { content: [{ type: 'text', text: `No instructions are set for #${sessionState.channelName}. Set them with mcp_chat_set_instructions.` }] };
+        return { content: [{ type: 'text', text: `No instructions are set for #${sessionState.channelName}. Set them with mcp_chat_manage, action 'set_instructions'.` }] };
       }
       return { content: [{ type: 'text', text: `Channel instructions for #${sessionState.channelName}:\n${sessionState.sessionInstructions}` }] };
     }
 
     case 'mcp_chat_set_instructions': {
       if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_join first.' }], isError: true };
       }
       if (typeof args.instructions !== 'string') {
         return { content: [{ type: 'text', text: 'instructions (string) is required. Pass an empty string to clear.' }], isError: true };
@@ -1375,7 +1423,7 @@ async function handleToolCall(name, args) {
 
     case 'mcp_chat_set_mode': {
       if (!sessionState.connected) {
-        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_connect first.' }], isError: true };
+        return { content: [{ type: 'text', text: 'Not connected. Run mcp_chat_join first.' }], isError: true };
       }
       if (args.mode !== 'broadcast' && args.mode !== 'mention') {
         return { content: [{ type: 'text', text: "mode must be 'broadcast' or 'mention'." }], isError: true };

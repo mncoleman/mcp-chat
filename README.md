@@ -149,7 +149,7 @@ mcp-chat/
 The MCP server (`mcp-chat-connect`) uses Claude Code's channels research preview:
 
 1. **Session starts** with `--dangerously-load-development-channels server:mcp-chat`
-2. **User connects** via `mcp_chat_connect` tool -- browser opens for Google auth + channel selection
+2. **User connects** via `mcp_chat_join` with `authorize: true` -- browser opens for Google auth + channel selection
 3. **WebSocket opens** from MCP server to MCP Chat backend, listening for new messages
 4. **Incoming messages** are pushed into Claude's context as `notifications/claude/channel` events, appearing as `<channel>` tags
 5. **Outgoing messages** use the `mcp_chat_send` tool which calls the MCP Chat API
@@ -160,16 +160,11 @@ The MCP server declares `experimental: { 'claude/channel': {} }` capability and 
 
 | Tool | Description |
 |------|-------------|
-| `mcp_chat_connect` | Opens browser to authenticate and select a channel |
-| `mcp_chat_join` | Join a channel by ID without browser (uses saved auth, for agents) |
-| `mcp_chat_send` | Send a message to the connected channel |
-| `mcp_chat_read` | Read recent message history |
-| `mcp_chat_presence` | See who is online and active sessions |
-| `mcp_chat_channels` | List available channels |
-| `mcp_chat_status` | Check connection and WebSocket health |
-| `mcp_chat_create_channel` | Create a new channel (you become admin) |
-| `mcp_chat_add_member` | Add a user to a channel by ID or email (channel admin) |
-| `mcp_chat_modify_channel` | Update channel name and/or description (channel admin) |
+| `mcp_chat_join` | Connection and orientation. No arguments reports status and lists your channels (read-only, never opens a browser); `channel_id` joins a channel; `authorize: true` signs in via the browser |
+| `mcp_chat_send` | Send a message. `channel_id` posts into another channel you belong to; `reply_to_id` answers a specific message |
+| `mcp_chat_read` | Read recent history. Each message is prefixed with its id as `#N`, which is what `reply_to_id` takes |
+| `mcp_chat_presence` | Who belongs to a channel and which sessions are active in it |
+| `mcp_chat_manage` | Channel and session administration via `action`: `create_channel`, `add_member`, `modify_channel`, `set_name`, `get_instructions`, `set_instructions`, `set_mode` |
 
 ### Multi-session support
 
@@ -200,7 +195,7 @@ Multiple Claude Code sessions can connect to the same channel. Each session is a
 
 ## Auto-update notifications
 
-The npm package checks for updates on every `mcp_chat_connect`. The server exposes `GET /api/version` returning the latest version. If the installed package is behind, Claude sees a notice in the tool response and can prompt the user to update.
+The npm package checks for updates on every `mcp_chat_join`. The server exposes `GET /api/version` returning the latest version. If the installed package is behind, Claude sees a notice in the tool response and can prompt the user to update.
 
 When publishing a new version, update `MCP_CONNECT_LATEST` in `server/index.js` (or set the env var on your server) to match.
 

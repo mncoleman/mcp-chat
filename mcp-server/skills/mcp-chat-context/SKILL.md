@@ -98,7 +98,7 @@ value was `null`). The wrapper script and marker file can then be deleted.
   (model + directory) when no upstream command is chained, so a blank line means
   the upstream command itself failed — check `~/.mcp-chat/status-line-config.json`.
 - **Badge never appears for me:** confirm you are connected
-  (`mcp_chat_status`), that a marker for your project dir
+  (`mcp_chat_join` with no arguments), that a marker for your project dir
   (`~/.mcp-chat/active-session-<projectdir-hash>.json`) exists and is recent,
   and that `statusLine.command` points at the wrapper.
 - **Badge is stale after I quit:** expected briefly — the server marks the

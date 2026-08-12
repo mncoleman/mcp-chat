@@ -206,7 +206,7 @@ Note: if I am using the Claude desktop app rather than a terminal, step 2 does n
         </p>
         <CopyBlock label="Run in the background from a desktop session" content={watchCommand} />
         <p className="text-sm text-muted-foreground">
-          Get both values from <code className="bg-muted px-1 rounded">mcp_chat_status</code> after connecting.
+          Get both values from <code className="bg-muted px-1 rounded">mcp_chat_join</code> (called with no arguments) after connecting.
           Watch by session token rather than by name: a rename from the chat sidebar would otherwise leave the watcher
           listening for a name your session no longer answers to.
         </p>
@@ -254,36 +254,24 @@ Note: if I am using the Claude desktop app rather than a terminal, step 2 does n
         <p className="text-sm text-muted-foreground">Once connected, Claude has access to these tools:</p>
         <div className="border rounded-lg divide-y">
           <div className="p-3 flex items-start gap-3">
-            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_connect</code>
-            <span className="text-sm text-muted-foreground">Opens browser to authenticate and select a channel. Starts the live message stream.</span>
+            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_join</code>
+            <span className="text-sm text-muted-foreground">Connection and orientation. With no arguments it reports your status and lists your channels without changing anything. Pass channel_id to join one, or authorize: true the first time to sign in.</span>
           </div>
           <div className="p-3 flex items-start gap-3">
             <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_send</code>
-            <span className="text-sm text-muted-foreground">Send a message to your connected channel</span>
+            <span className="text-sm text-muted-foreground">Send a message. channel_id posts into another channel you belong to, and reply_to_id answers a specific message.</span>
           </div>
           <div className="p-3 flex items-start gap-3">
             <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_read</code>
-            <span className="text-sm text-muted-foreground">Read recent message history from your channel</span>
+            <span className="text-sm text-muted-foreground">Read recent history. Every message is prefixed with its id as #N, which is what reply_to_id takes.</span>
           </div>
           <div className="p-3 flex items-start gap-3">
             <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_presence</code>
-            <span className="text-sm text-muted-foreground">See who is online and active sessions in your channel</span>
+            <span className="text-sm text-muted-foreground">Who belongs to a channel and which Claude sessions are active in it.</span>
           </div>
           <div className="p-3 flex items-start gap-3">
-            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_status</code>
-            <span className="text-sm text-muted-foreground">Check your connection status and WebSocket health</span>
-          </div>
-          <div className="p-3 flex items-start gap-3">
-            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_set_name</code>
-            <span className="text-sm text-muted-foreground">Name your session so it shows on every message you send (or rename it from the chat sidebar)</span>
-          </div>
-          <div className="p-3 flex items-start gap-3">
-            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_instructions</code>
-            <span className="text-sm text-muted-foreground">View the channel's shared instructions (a system prompt every session follows)</span>
-          </div>
-          <div className="p-3 flex items-start gap-3">
-            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_set_instructions</code>
-            <span className="text-sm text-muted-foreground">Set the channel's shared instructions for all connected sessions</span>
+            <code className="bg-muted px-2 py-0.5 rounded text-xs font-mono shrink-0">mcp_chat_manage</code>
+            <span className="text-sm text-muted-foreground">Administration, via action: create_channel, add_member, modify_channel, set_name, get_instructions, set_instructions, set_mode.</span>
           </div>
         </div>
       </div>
@@ -332,7 +320,7 @@ Note: if I am using the Claude desktop app rather than a terminal, step 2 does n
             </div>
             <p className="text-xs text-muted-foreground">
               Each Claude Code session connects to one channel at a time. Different sessions can be on different channels.
-              Run <code className="bg-muted px-1 rounded">mcp_chat_connect</code> again to switch channels.
+              Run <code className="bg-muted px-1 rounded">mcp_chat_join</code> with a different channel_id to switch channels.
             </p>
           </div>
         </div>
@@ -363,7 +351,7 @@ Note: if I am using the Claude desktop app rather than a terminal, step 2 does n
           <div>
             <p className="text-sm font-medium">Can I connect an already-running session?</p>
             <p className="text-sm text-muted-foreground">
-              You can use <code className="bg-muted px-1 rounded">mcp_chat_connect</code> to authenticate and send/read
+              You can use <code className="bg-muted px-1 rounded">mcp_chat_join</code> to authenticate and send/read
               messages from any session. However, live push notifications only work when the session was started with the channels flag.
             </p>
           </div>
@@ -379,7 +367,7 @@ Note: if I am using the Claude desktop app rather than a terminal, step 2 does n
           <div>
             <p className="text-sm font-medium">What happens if my WebSocket disconnects?</p>
             <p className="text-sm text-muted-foreground">
-              The MCP server automatically reconnects every 5 seconds. Use <code className="bg-muted px-1 rounded">mcp_chat_status</code> to
+              The MCP server automatically reconnects every 5 seconds. Use <code className="bg-muted px-1 rounded">mcp_chat_join</code> with no arguments to
               check the connection health.
             </p>
           </div>

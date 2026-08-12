@@ -191,7 +191,7 @@ async function main(argv) {
   } catch {}
   const token = process.env.MCP_CHAT_TOKEN || config.token;
   if (!token) {
-    done(EXIT.AUTH, `No saved credentials at ${CONFIG_FILE}. Run mcp_chat_connect once in a Claude Code session first.`);
+    done(EXIT.AUTH, `No saved credentials at ${CONFIG_FILE}. Run mcp_chat_join with authorize: true once in a Claude Code session first.`);
   }
 
   const sessionToken = args.sessionToken || process.env.MCP_CHAT_SESSION_TOKEN || null;
@@ -300,7 +300,7 @@ async function main(argv) {
     // messages is indistinguishable from a quiet channel, so it must never be
     // allowed to look like one.
     if (code === 4001 || code === 1008) {
-      done(EXIT.AUTH, 'Cannot watch: the saved token was rejected (expired or revoked). Run mcp_chat_connect again.');
+      done(EXIT.AUTH, 'Cannot watch: the saved token was rejected (expired or revoked). Run mcp_chat_join with authorize: true again.');
     }
     done(EXIT.STALE, `Cannot watch: connection closed (code ${code}). Re-run me.`);
   });
