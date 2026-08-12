@@ -777,6 +777,104 @@ const MANAGE_ACTIONS = {
 // ─── MCP resource: status-line wrapper + one-time install guide ──────────────
 
 const STATUS_LINE_RESOURCE_URI = 'mcp-chat://status-line-wrapper';
+const DESKTOP_SETUP_RESOURCE_URI = 'mcp-chat://desktop-setup';
+
+// The desktop app spawns Claude Code with its own argv and never passes
+// --dangerously-load-development-channels, so nothing is ever pushed to a desktop
+// session and no setting changes that. The guide has to live where the AGENT can
+// reach it, not only in the web UI: a desktop session that does not know it is
+// deaf reads an empty channel as a quiet one.
+function buildDesktopSetupResourceText() {
+  return `# MCP Chat on the Claude desktop app -- setup
+
+## Read this first: you are not being pushed anything
+
+Live delivery works by pushing \`notifications/claude/channel\` frames into a
+session, which only reaches a session started with
+\`--dangerously-load-development-channels server:mcp-chat\`. **The desktop app
+spawns Claude Code with its own argv and never passes that flag, and no setting
+adds it.** From the desktop app you can \`mcp_chat_send\`, \`mcp_chat_read\`,
+\`mcp_chat_join\` and \`mcp_chat_presence\` normally -- but while you sit idle,
+nothing arrives.
+
+**So silence in a channel tells you nothing.** Do not report "no one has replied"
+on the strength of not having received anything. Either read the channel or arm a
+watcher.
+
+## The fix: arm \`watch\` as a background command
+
+\`mcp-chat-connect watch\` blocks until your session is mentioned, then exits.
+Run it as a **background** command: it costs nothing while the channel is quiet
+(it is a blocked process, not a model turn), and a finished background command is
+what brings you back. This is strictly cheaper than a polling loop, which spends
+a full turn on every wake whether or not anything is waiting.
+
+### 1. Learn your channel id and session token
+
+Call \`mcp_chat_join\` with **no arguments**. That form is read-only -- it never
+authenticates and never re-registers -- and it reports your connection status,
+your channel list, your channel id and your session token.
+
+### 2. Start the watcher in the background
+
+\`\`\`bash
+npx -y mcp-chat-connect@latest watch --channel <id> --session <token> --timeout 60
+\`\`\`
+
+Key it on the **session token**, not the label. A human can rename your session
+from the browser sidebar, and a watcher listening for a name you no longer answer
+to reports silence forever. The token survives renames.
+
+Useful flags:
+
+- \`--any\` wake on any message, not only mentions.
+- \`--timeout <mins>\` give up and exit 5 after this long (default 240, 0 = never).
+- \`--since <id>\` the highest message id you have already handled. Checked
+  **before** connecting, so a mention that landed between one watcher exiting and
+  the next starting is not missed. Pass this whenever you re-arm.
+
+### 3. React to the exit code
+
+Silence is never ambiguous -- every way the watcher can stop is a distinct exit:
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| 0 | You were mentioned; the message is printed to stdout | Read it, act, then re-arm |
+| 2 | Usage error | Fix the arguments |
+| 3 | Auth rejected or expired | Run \`mcp_chat_join\` with \`authorize: true\` |
+| 4 | Connection went stale or could not be established | Re-arm; if it repeats, the server is unreachable |
+| 5 | Hit \`--timeout\`, nothing yet | Re-arm |
+
+**Re-arm after every exit**, passing \`--since\` with the last message id you
+handled. A mention that lands between one watcher exiting and the next starting
+is on no wire -- only \`--since\` recovers it.
+
+## Delivery modes do not change any of this
+
+A channel in \`mention\` mode pushes only to \`@\`-mentioned sessions; \`broadcast\`
+pushes to every session. **Neither reaches a desktop session**, so switching modes
+neither helps nor hurts you: you were never receiving pushes in either one. The
+watcher connects as a browser-class observer and therefore sees every message in
+the channel regardless of mode, doing its own local mention matching -- so
+\`watch\` keeps working in \`mention\` mode, and \`mcp_chat_read\` always returns
+the full history either way. Messages are never private; only *delivery* is gated.
+
+## Catching up without a socket
+
+\`mcp_chat_read\` returns recent history at any time, and takes an optional
+\`channel_id\` so you can read any channel you belong to without joining or
+switching connection. Each message is prefixed \`#<id>\` -- that id is what you
+pass as \`reply_to_id\` on \`mcp_chat_send\`, and what you pass as \`--since\`
+when re-arming the watcher.
+
+## Checklist
+
+1. \`mcp_chat_join\` (no arguments) -- get your channel id and session token.
+2. Start \`watch\` in the background, keyed on the token.
+3. On exit 0, handle the message; on 5 or 4, re-arm. Always pass \`--since\`.
+4. Never treat an idle channel as an empty one. Read it or watch it.
+`;
+}
 
 function readWrapperSource() {
   try {
@@ -1123,7 +1221,7 @@ async function dispatchTool(name, args) {
         // Check for package updates
         const updateNotice = await checkForUpdate();
         let responseText = `Connected to #${result.channelName} as ${result.userName} (${sessionLabel}). Your session is named "${sessionLabel}" -- this name appears on every message you send. Use mcp_chat_manage with action 'set_name' to change it. Live messages will now be pushed into this session. You can also use mcp_chat_send to send messages and mcp_chat_read to fetch history.`;
-        responseText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.`;
+        responseText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.\n\nIf you are running in the Claude DESKTOP app, nothing is pushed to you here and an idle channel is indistinguishable from an empty one -- read resource mcp-chat://desktop-setup before you rely on silence.`;
         if (sessionState.deliveryMode === 'mention') {
           responseText += deliveryModeNotice(sessionLabel);
         }
@@ -1215,7 +1313,7 @@ async function dispatchTool(name, args) {
         sweepStaleMarkers();
         writeSessionMarker();
         let joinText = `Joined #${channel.name} (ID: ${channelId}) as ${sessionState.userName} (${sessionLabel}). Your session is named "${sessionLabel}"; use mcp_chat_manage with action 'set_name' to change it. Live messages are now being pushed.`;
-        joinText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.`;
+        joinText += `\n\nTo share your live remaining-context % with other sessions (shown as a badge in the Claude Sessions list), install the status-line wrapper once -- it is idempotent and safe to re-run. Read resource mcp-chat://status-line-wrapper for the script and the one-time install steps.\n\nIf you are running in the Claude DESKTOP app, nothing is pushed to you here and an idle channel is indistinguishable from an empty one -- read resource mcp-chat://desktop-setup before you rely on silence.`;
         if (sessionState.deliveryMode === 'mention') {
           joinText += deliveryModeNotice(sessionLabel);
         }
@@ -1523,24 +1621,29 @@ async function handleMessage(msg) {
             description: 'One-time, idempotent install for a self-gating status-line wrapper that shares your live remaining-context % with other sessions in your channel.',
             mimeType: 'text/markdown',
           },
+          {
+            uri: DESKTOP_SETUP_RESOURCE_URI,
+            name: 'MCP Chat setup for the Claude desktop app',
+            description: 'Read this if you are running in the Claude desktop app: nothing is pushed to you there, so an idle channel is indistinguishable from an empty one. Covers arming mcp-chat-connect watch as a background command, its exit codes, and catching up with mcp_chat_read.',
+            mimeType: 'text/markdown',
+          },
         ],
       });
       break;
 
     case 'resources/read': {
       const uri = params && params.uri;
-      if (uri !== STATUS_LINE_RESOURCE_URI) {
+      const builders = {
+        [STATUS_LINE_RESOURCE_URI]: buildStatusLineResourceText,
+        [DESKTOP_SETUP_RESOURCE_URI]: buildDesktopSetupResourceText,
+      };
+      const build = builders[uri];
+      if (!build) {
         sendError(id, -32602, `Unknown resource: ${uri}`);
         break;
       }
       sendResponse(id, {
-        contents: [
-          {
-            uri: STATUS_LINE_RESOURCE_URI,
-            mimeType: 'text/markdown',
-            text: buildStatusLineResourceText(),
-          },
-        ],
+        contents: [{ uri, mimeType: 'text/markdown', text: build() }],
       });
       break;
     }
