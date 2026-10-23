@@ -1,5 +1,5 @@
 # Stage 1: Build the React client
-FROM node:20-alpine AS client-build
+FROM node:24-alpine AS client-build
 WORKDIR /app/client
 COPY client/package.json client/package-lock.json* ./
 RUN npm install
@@ -11,7 +11,7 @@ ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN npm run build
 
 # Stage 2: Server + serve client
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 
 # Install server dependencies
