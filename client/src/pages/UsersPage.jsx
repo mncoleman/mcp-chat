@@ -86,7 +86,7 @@ function ServiceKeys({ userId }) {
           type="text"
           value={newKeyLabel}
           onChange={(e) => setNewKeyLabel(e.target.value)}
-          placeholder="Key label (e.g. Jarvis homeserver)"
+          placeholder="Key label (e.g. Agents homeserver)"
           className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm"
         />
         <Button type="submit" size="sm" disabled={!newKeyLabel.trim() || createMutation.isPending}>
